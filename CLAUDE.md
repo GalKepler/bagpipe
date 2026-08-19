@@ -194,13 +194,33 @@ same PR.**
       pipeline runs end to end, join finds the expected session count.
       Synthetic test suite: `tests/test_sfcn.py` (tiny random volumes, tiny
       channels, 2 epochs — forward-shape check + fit/predict +
-      config-driven `run()` through the harness). **Not yet done**: an
-      actual multi-epoch training run at real scale (the verification run
-      above was 1 epoch on 16 sessions, not a trained model — full 5-fold
-      grouped CV × nested bias-correction CV over ~5,461 sessions is real
-      GPU-hours and hasn't been launched; needs a call on epochs/batch
-      size/runtime budget first), SFCN-vs-stacked leaderboard comparison,
-      model registry/promotion.*
+      config-driven `run()` through the harness). Overnight multi-epoch
+      training run launched 2026-08-19, in progress. **Not yet done**:
+      SFCN run completion + SFCN-vs-stacked leaderboard comparison.*
+
+      *Update (2026-08-19): model registry + promotion added
+      (`src/bagpipe/db/models.py::ModelRegistry`,
+      `src/bagpipe/models/promote.py`, `bag models promote --name stacked
+      --config config/models/stacked.yaml --version v1`) — fits the model
+      on full data (not just CV folds), serializes with **cloudpickle**
+      (plain `joblib`/`pickle` can't serialize the stacker's closures —
+      `stacker_fn`/`model_fn` in `stacked.py` are locals), stores the
+      artifact under `paths.models_dir` (new config key, `outputs/models/`,
+      git-ignored under the existing `outputs/` rule), and inserts a
+      `models_registry` row (config/metrics JSON, MLflow run ID, stage).
+      Promoting a `stage="production"` row auto-archives any prior
+      production row with the same `name`. **Stacked ensemble promoted as
+      v1 production model** (`model_id=1`), verified against real data:
+      artifact loads and predicts on the real region matrix (5-sample
+      sanity check, predictions in plausible age range). Real-data CV
+      metrics logged: MAE raw≈4.70y, MAE corrected≈5.71y (same Cole-
+      correction-worsens-MAE tradeoff noted in the earlier stacked-ensemble
+      update — expected, not a bug). Only `stacked` is wired into
+      `RUNNERS` in `promote.py` so far — baseline/SFCN promotion would need
+      their own `run()` to expose `model_fn`/`config` in `info` the same
+      way `stacked.run()` now does. Not yet done: SFCN comparison before
+      considering a v2 promotion, `predictions` table (BAG values aren't
+      yet persisted per-prediction, only aggregate CV metrics).*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
 - [ ] **Phase 4 — Web app:** preprocessing container, upload→queue→worker→report

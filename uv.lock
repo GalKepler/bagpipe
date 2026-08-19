@@ -304,6 +304,7 @@ name = "bagpipe"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cloudpickle" },
     { name = "lightgbm" },
     { name = "mlflow" },
     { name = "monai" },
@@ -330,6 +331,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cloudpickle", specifier = ">=3.0" },
     { name = "jupyter", marker = "extra == 'dev'" },
     { name = "lightgbm", specifier = ">=4.0" },
     { name = "matplotlib", marker = "extra == 'dev'" },

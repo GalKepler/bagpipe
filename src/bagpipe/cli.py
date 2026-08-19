@@ -33,6 +33,10 @@ def main() -> None:
     train_sfcn.add_argument(
         "--config", default="config/models/sfcn.yaml", help="Path to SFCN config YAML"
     )
+    promote = models_sub.add_parser("promote", help="Fit on full data and register as production")
+    promote.add_argument("--name", required=True, choices=["stacked"], help="Registered model name")
+    promote.add_argument("--config", required=True, help="Path to model config YAML")
+    promote.add_argument("--version", required=True, help="Version tag, e.g. v1")
 
     args = parser.parse_args()
 
@@ -92,6 +96,13 @@ def main() -> None:
         print(f"run: {info['run_name']} ({info['n_samples']} samples), log: {info['log_dir']}")
         for k, v in result.metrics.items():
             print(f"  {k}: {v:.3f}")
+        return
+
+    if args.command == "models" and args.models_command == "promote":
+        from bagpipe.models.promote import promote as promote_run
+
+        entry = promote_run(args.name, args.config, version=args.version)
+        print(f"promoted model_id={entry.model_id} {entry.name} {entry.version} -> {entry.stage}")
         return
 
     parser.print_help()

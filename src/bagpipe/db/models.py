@@ -19,6 +19,23 @@ from sqlalchemy.orm import Mapped, mapped_column
 from bagpipe.db.base import Base
 
 
+class ModelRegistry(Base):
+    """Versioned, promotable model artifacts (DESIGN.md §3.2/§4.3). Every BAG
+    value traces back to a specific row here."""
+
+    __tablename__ = "models_registry"
+
+    model_id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String)  # e.g. "stacked"
+    version: Mapped[str] = mapped_column(String)  # e.g. "v1"
+    stage: Mapped[str] = mapped_column(String, default="none")  # none | production | archived
+    config_json: Mapped[str] = mapped_column(String)
+    metrics_json: Mapped[str] = mapped_column(String)
+    artifact_path: Mapped[str] = mapped_column(String)
+    mlflow_run_id: Mapped[str | None] = mapped_column(String)
+    trained_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Feature(Base):
     __tablename__ = "features"
     __table_args__ = (

@@ -13,6 +13,7 @@ paths:
   db_path: /media/storage/brainlink/brainlink.db   # shared with brainlink, not copied
   mlflow_dir: /media/storage/bagpipe/outputs/mlruns
   datasets_dir: /media/storage/bagpipe/outputs/datasets
+  models_dir: /media/storage/bagpipe/outputs/models
 
 app:
   smtp_host: null

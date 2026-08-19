@@ -63,7 +63,7 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
     mlflow.set_experiment(mlflow_cfg.get("experiment", "bagpipe-baseline"))
     run_name = mlflow_cfg.get("run_name") or "stacked"
-    with mlflow.start_run(run_name=run_name):
+    with mlflow.start_run(run_name=run_name) as mlflow_run:
         mlflow.log_params(
             {
                 "model_type": "stacked",
@@ -84,6 +84,9 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
         "region_columns": region_columns,
         "n_regions": len(region_mapping),
         "run_name": run_name,
+        "mlflow_run_id": mlflow_run.info.run_id,
+        "model_fn": model_fn,
+        "config": config,
     }
 
 
