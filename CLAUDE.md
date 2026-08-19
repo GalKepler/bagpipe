@@ -223,6 +223,28 @@ same PR.**
       yet persisted per-prediction, only aggregate CV metrics).*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
+      *Status (2026-08-19): kickoff started. `events` table added
+      (`src/bagpipe/db/models.py::Event`, seeded idempotently from
+      `config/events.yaml` via `bag ingest events` — Oct 7 war, judicial
+      reform, 3 COVID lockdown waves, all public dates). Walkthrough
+      notebook (`notebooks/causal_bag_walkthrough.ipynb`) builds the
+      longitudinal BAG panel from `predictions` + `events`, and runs the
+      mixed-model DiD, event-study, placebo, and selection-bias designs from
+      DESIGN.md §5 — verified end-to-end against the real DB (926 subjects
+      with ≥2 sessions). Caught a real bug during verification: joining
+      predictions to scan dates on `session_id` alone fans rows out ~2x,
+      because SNBB's per-scan `session_id` and the legacy cohort's 12-digit
+      `subject_id` share the same timestamp-ID format and collide across
+      cohorts — fixed by joining on `(subject_key, session_id)`. **Not yet
+      done, and the actual blocker**: exposure/dose mapping from the
+      questionnaire. Candidate geography columns exist
+      (`Place_of_Residense`, `Living_environment`, `Current_Environment`,
+      `Childhood_envinronmnet`) and candidate outcome/severity instruments
+      too (`PCL-5`, `OASIS`, `GAD7`, `PHQ9`, `LongCovid`, `HolocaustLineage`)
+      but which is exposure vs. outcome, and how to turn geography into a
+      dose gradient, is a domain call — needs the maintainer, not assumed
+      in the notebook. All designs currently run binary post/pre only until
+      that's resolved.*
 - [ ] **Phase 4 — Web app:** preprocessing container, upload→queue→worker→report
       pipeline, consent/deletion logic.
 
