@@ -1,35 +1,44 @@
 # bag models train-sfcn --config config/models/sfcn.yaml
 #
-# Update (2026-08-19): switched to fine-tuning from UKB-pretrained SFCN
-# weights instead of from-scratch (the from-scratch overnight run was killed
-# early, fold 1 epoch 1, to free the GPU for this — its metrics are not
-# comparable to a completed run either way). Fine-tuning converges much
-# faster than scratch training on this dataset size, so epochs/patience are
-# cut down rather than reusing the scratch budget. lr lowered 10x (1e-5) —
-# fine-tuning a pretrained net with the scratch LR risks wrecking the loaded
-# weights in the first few steps. Fixing the pretrained load also fixed a
-# real bug: the last conv block used kernel_size=3 like every other block,
-# but the paper (and this checkpoint) use a 1x1x1 kernel there — the
-# scratch run trained under the wrong architecture too.
+# Update (2026-08-19, reverted): UKB-pretrained fine-tune killed — val_mae
+# stuck ~29-30y through epoch 4/8 (vs raw-baseline-beating scratch numbers),
+# worse than not using the pretrained weights at all. Root cause not fully
+# diagnosed (candidates: lr=1e-5 still too aggressive for a loaded net,
+# input normalization mismatch with the UKB preprocessing pipeline, or the
+# remapped state dict silently dropping something beyond the classifier
+# head) — worth revisiting, but not blocking scratch training. Back to
+# from-scratch, still carrying the real kernel_size=1x1x1 fix from that
+# commit (applies regardless of pretrained_weights_path).
 #
-# Budget note (unchanged from the scratch run): full rigor (n_splits=5 +
-# nested Cole bias-correction CV) is too slow for this GPU at this per-epoch
-# cost; still deferring bias correction to a follow-up run.
+# Budget note: full rigor (n_splits=5 + nested Cole bias-correction CV,
+# ~51h) is too slow for this GPU; 5 outer folds, no bias correction,
+# epochs capped at 15 with patience=5 (~7h estimated from small-sample
+# benchmark — real runs have come in ~2x that in practice, budget for it).
 # batch_size=2 because the 8GB card typically has only ~5-6GB free (desktop
 # session shares it) — batch_size=8 OOM'd.
+#
+# Update (2026-08-19c): architecture review before this overnight run —
+# BatchNorm3d swapped for GroupNorm (batch_size=2 gives BatchNorm noisy,
+# near-meaningless running stats — likely cause of the fine-tune
+# instability above too), added AMP (autocast+GradScaler, cuts activation
+# memory so batch_size=2 isn't as tight), added train-only flip+affine
+# augmentation, and fixed a real leakage bug: the inner train/val split
+# used for early stopping was a plain random split, not subject-grouped —
+# violated the non-negotiable grouped-CV rule at the inner level even
+# though the outer harness enforced it correctly. All four in sfcn.py.
 model:
-  epochs: 8
+  epochs: 15
   batch_size: 2
-  lr: 0.00001
+  lr: 0.0001
   weight_decay: 0.001
   dropout: 0.5
   num_workers: 6
   val_fraction: 0.1
-  patience: 3
-  pretrained_weights_path: /media/storage/bagpipe/outputs/pretrained/ukb_sfcn_run20190719_00_epoch_best_mae.p
+  patience: 5
+  pretrained_weights_path: null # UKB fine-tune underperformed scratch, see note above
   verbose: true # per-epoch train_loss/val_mae prints, for tracking an overnight run's progress
 bias_correction: none # deferred — see budget note above
 n_splits: 5
 mlflow:
   experiment: bagpipe-baseline
-  run_name: sfcn-ukb-finetune-2026-08-19
+  run_name: sfcn-scratch-overnight-2026-08-19c

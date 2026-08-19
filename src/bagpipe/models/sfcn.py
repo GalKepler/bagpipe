@@ -15,6 +15,7 @@ Upgrade to the soft-classification head if it measurably beats regression.
 from __future__ import annotations
 
 import csv
+import re
 import time
 from itertools import count
 from pathlib import Path
@@ -23,6 +24,7 @@ import mlflow
 import numpy as np
 import torch
 import yaml
+from sklearn.model_selection import GroupShuffleSplit
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
@@ -52,7 +54,17 @@ def _remap_ukb_pretrained_state_dict(state: dict) -> dict:
 
 
 class SFCN(nn.Module):
-    """5 conv-bn-maxpool-relu blocks + 1 conv-bn-relu block + GAP + linear."""
+    """5 conv-gn-maxpool-relu blocks + 1 conv-gn-relu block + GAP + linear.
+
+    GroupNorm, not BatchNorm3d: at batch_size=2 (forced by 8GB VRAM),
+    BatchNorm's running mean/var are estimated from 2 samples per step —
+    too noisy to be a useful normalizer and a likely cause of the unstable
+    UKB fine-tune run (2026-08-19). GroupNorm's stats are per-sample, so
+    it's invariant to batch size. Trade-off: breaks loading the UKB
+    checkpoint's BatchNorm3d weights (different state-dict shape) — fine
+    for now since that fine-tune is deprioritized (see sfcn.yaml note); if
+    revisited, `_remap_ukb_pretrained_state_dict` needs a norm-layer skip.
+    """
 
     def __init__(self, channel_number: list[int] = DEFAULT_CHANNELS, dropout: float = 0.5):
         super().__init__()
@@ -64,9 +76,13 @@ class SFCN(nn.Module):
             # the UKB-pretrained checkpoint's conv_5 — required for
             # `pretrained_weights_path` to load, not just a style choice.
             kernel_size, padding = (1, 0) if is_last else (3, 1)
+            # GroupNorm needs num_groups to divide out_ch; 8 works for the
+            # real channel widths (all multiples of 32) but tests use tiny
+            # channel counts, so fall back to the largest divisor <= 8.
+            num_groups = next(g for g in (8, 4, 2, 1) if out_ch % g == 0)
             layer = [
                 nn.Conv3d(in_ch, out_ch, kernel_size=kernel_size, padding=padding),
-                nn.BatchNorm3d(out_ch),
+                nn.GroupNorm(num_groups, out_ch),
             ]
             if not is_last:
                 layer += [nn.MaxPool3d(2), nn.ReLU(inplace=True)]
@@ -88,16 +104,36 @@ class SFCN(nn.Module):
         return self.head(x).squeeze(-1)
 
 
-def _default_transform():
-    from monai.transforms import Compose, EnsureChannelFirst, LoadImage, NormalizeIntensity
-
-    return Compose(
-        [
-            LoadImage(image_only=True, dtype=np.float32),
-            EnsureChannelFirst(),
-            NormalizeIntensity(nonzero=True),
-        ]
+def _default_transform(augment: bool = False):
+    from monai.transforms import (
+        Compose,
+        EnsureChannelFirst,
+        LoadImage,
+        NormalizeIntensity,
+        RandAffine,
+        RandFlip,
     )
+
+    steps = [
+        LoadImage(image_only=True, dtype=np.float32),
+        EnsureChannelFirst(),
+        NormalizeIntensity(nonzero=True),
+    ]
+    if augment:
+        # Train-only. L-R flip (brain is roughly bilaterally symmetric) +
+        # small rotation/translation — cheap regularizer against overfitting
+        # a 3D CNN on ~5k volumes. Not applied to val/test (must stay a
+        # clean estimate of generalization).
+        steps += [
+            RandFlip(prob=0.5, spatial_axis=0),
+            RandAffine(
+                prob=0.5,
+                rotate_range=(0.05, 0.05, 0.05),
+                translate_range=(3, 3, 3),
+                padding_mode="zeros",
+            ),
+        ]
+    return Compose(steps)
 
 
 class NiftiAgeDataset(Dataset):
@@ -229,13 +265,25 @@ class SFCNRegressor:
         """
         X = np.asarray(X)
         y = np.asarray(y, dtype=np.float32)
-        rng = np.random.default_rng(self.random_state)
         n_val = max(1, int(len(X) * self.val_fraction)) if len(X) > 10 else 0
-        perm = rng.permutation(len(X))
-        val_idx, train_idx = perm[:n_val], perm[n_val:]
+        if n_val:
+            # Subject-grouped, not a plain random split — a subject's other
+            # session landing in val while one is in train would leak
+            # identity into early-stopping/checkpoint selection (DESIGN.md's
+            # non-negotiable grouped-CV rule, which the outer harness enforces
+            # but this inner split previously didn't). `evaluate()` doesn't
+            # pass groups through `fit(X, y)`, so derive them from the
+            # `sub-<id>` BIDS entity embedded in each image path.
+            subject_ids = np.array([re.search(r"sub-([^/_]+)", p).group(1) for p in X])
+            splitter = GroupShuffleSplit(
+                n_splits=1, test_size=self.val_fraction, random_state=self.random_state
+            )
+            train_idx, val_idx = next(splitter.split(X, y, subject_ids))
+        else:
+            train_idx, val_idx = np.arange(len(X)), np.array([], dtype=int)
 
         train_loader = DataLoader(
-            NiftiAgeDataset(X[train_idx], y[train_idx]),
+            NiftiAgeDataset(X[train_idx], y[train_idx], transform=_default_transform(augment=True)),
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
@@ -255,6 +303,8 @@ class SFCNRegressor:
             self.model_.parameters(), lr=self.lr, weight_decay=self.weight_decay
         )
         loss_fn = nn.L1Loss()
+        use_amp = self.device == "cuda"
+        scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
         best_val_mae = float("inf")
         best_state = None
@@ -267,9 +317,11 @@ class SFCNRegressor:
             for volumes, ages in train_loader:
                 volumes, ages = volumes.to(self.device), ages.to(self.device)
                 optimizer.zero_grad()
-                loss = loss_fn(self.model_(volumes), ages)
-                loss.backward()
-                optimizer.step()
+                with torch.autocast(device_type=self.device, enabled=use_amp):
+                    loss = loss_fn(self.model_(volumes), ages)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
                 batch_losses.append(loss.item())
             train_loss = float(np.mean(batch_losses))
 
@@ -304,7 +356,7 @@ class SFCNRegressor:
     def _eval_mae(self, loader: DataLoader) -> float:
         self.model_.eval()
         errors = []
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type=self.device, enabled=self.device == "cuda"):
             for volumes, ages in loader:
                 volumes, ages = volumes.to(self.device), ages.to(self.device)
                 errors.append((self.model_(volumes) - ages).abs().cpu().numpy())
@@ -317,7 +369,7 @@ class SFCNRegressor:
         )
         self.model_.eval()
         preds = []
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(device_type=self.device, enabled=self.device == "cuda"):
             for volumes in loader:
                 preds.append(self.model_(volumes.to(self.device)).cpu().numpy())
         return np.concatenate(preds)
