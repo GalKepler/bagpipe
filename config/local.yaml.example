@@ -1,0 +1,20 @@
+# Copy to config/local.yaml (git-ignored) and fill in real paths.
+# bagpipe.core.config loads config/local.yaml — never hardcode these paths in code.
+
+paths:
+  bids_root: /mnt/62/Bids
+  qsiprep_dir: /mnt/62/Processed_Data/derivatives/qsiprep
+  qsirecon_dir: /mnt/62/Processed_Data/derivatives/qsirecon
+  cat12_dir: /mnt/62/Processed_Data/derivatives/tabular_cat12
+  cat12_images_dir: /media/storage/yalab-dev/BIDS/derivatives/CAT12.9_2577.new  # local disk, not SMB
+  legacy_demographics_csv: null  # PII-bearing CSV for the pre-SNBB (non-S####) cohort; path only
+  tabular_exports_dir: /mnt/62/Processed_Data/derivatives/tabular
+  id_mapping_file: null   # brainlink resolves identity; bagpipe joins via participant.uid
+  db_path: /media/storage/brainlink/brainlink.db   # shared with brainlink, not copied
+  mlflow_dir: /media/storage/bagpipe/outputs/mlruns
+  datasets_dir: /media/storage/bagpipe/outputs/datasets
+
+app:
+  smtp_host: null
+  smtp_port: 587
+  from_address: null

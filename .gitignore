@@ -1,0 +1,29 @@
+# data & secrets — never commit
+config/local.yaml
+*.sqlite
+*.sqlite3
+*.db
+data/
+outputs/
+mlruns/
+*.nii
+*.nii.gz
+*.dcm
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# notebooks (stripped outputs only tracked; raw checkpoints ignored)
+.ipynb_checkpoints/
+
+# os/editor
+.DS_Store
+.idea/
+.vscode/
