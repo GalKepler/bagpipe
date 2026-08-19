@@ -23,6 +23,12 @@ def main() -> None:
     train_baseline.add_argument(
         "--config", default="config/models/baseline.yaml", help="Path to baseline config YAML"
     )
+    train_stacked = models_sub.add_parser(
+        "train-stacked", help="Train the per-region stacked ensemble"
+    )
+    train_stacked.add_argument(
+        "--config", default="config/models/stacked.yaml", help="Path to stacked config YAML"
+    )
 
     args = parser.parse_args()
 
@@ -62,6 +68,15 @@ def main() -> None:
 
         result, info = train_baseline_run(args.config)
         print(f"run: {info['run_name']} ({len(info['region_columns'])} regions)")
+        for k, v in result.metrics.items():
+            print(f"  {k}: {v:.3f}")
+        return
+
+    if args.command == "models" and args.models_command == "train-stacked":
+        from bagpipe.models.stacked import run as train_stacked_run
+
+        result, info = train_stacked_run(args.config)
+        print(f"run: {info['run_name']} ({info['n_regions']} regions)")
         for k, v in result.metrics.items():
             print(f"  {k}: {v:.3f}")
         return

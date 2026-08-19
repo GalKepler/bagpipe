@@ -2,6 +2,8 @@
 model:
   type: linear # linear | ridge | lightgbm
   params: {}
+features:
+  metrics: [vol_gm] # flat single-metric model; use `stacked.yaml` for multi-metric fusion
 bias_correction: cole # none | cole | beheshti
 n_splits: 5
 mlflow:

@@ -45,7 +45,8 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     base_model_fn = lambda: MODEL_TYPES[model_type](model_params)  # noqa: E731
     model_fn = lambda: TIVSexAdjustedRegressor(base_model_fn)  # noqa: E731
 
-    X, y, groups, region_columns = build_region_matrix(get_path("datasets_dir"))
+    metrics = config.get("features", {}).get("metrics", ["vol_gm"])
+    X, y, groups, region_columns = build_region_matrix(get_path("datasets_dir"), metrics=metrics)
     bias_corrector = get_corrector(config.get("bias_correction", "none"))
     n_splits = config.get("n_splits", 5)
 
@@ -63,6 +64,7 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
                 "model_type": model_type,
                 "bias_correction": config.get("bias_correction", "none"),
                 "n_splits": n_splits,
+                "metrics": ",".join(metrics),
                 "n_regions": len(region_columns),
                 "n_samples": len(y),
                 **{f"model__{k}": v for k, v in model_params.items()},

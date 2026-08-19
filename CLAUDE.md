@@ -103,7 +103,9 @@ same PR.**
       (`covariate_adjustment.py`, residualized on train fold only). Tabular
       baselines live (`baseline.py`, `bag models train-baseline --config
       config/models/*.yaml`): `linear`, `ridge` (RidgeCV, alpha tuned
-      internally — **current best model**, MAE≈4.2y raw), `lightgbm` (kept
+      internally — GM-volume-only flat model, MAE≈5.0y raw, see the
+      2026-08-19 update below for why this number changed and is no longer
+      the leaderboard leader), `lightgbm` (kept
       in code, dropped from the demo notebook per maintainer request — no
       real accuracy edge over ridge here and much slower). MLflow logging
       wired (local, SQLite-backed tracking store at `paths.mlflow_dir`).
@@ -116,11 +118,57 @@ same PR.**
       → corrected slope ~0.01 (n.s.). Finding worth carrying into Phase 3:
       corrected BAG differs by sex (Female +0.63y vs Male -0.42y, p<0.0001,
       n=2326/3124, Ridge model) — real, survives proper bias correction,
-      not an artifact. Not yet done: stacked ensemble port, SFCN fine-tune
-      (blocked on GPU driver, see Phase 0), model registry/promotion.
+      not an artifact. Not yet done: SFCN fine-tune (blocked on GPU driver,
+      see Phase 0), model registry/promotion.
       Also: `pyproject.toml` now excludes `notebooks/` from ruff lint
       (exploration-only; pre-existing `db_review.ipynb` had unrelated lint
       debt — nbstripout still handles their output hygiene).*
+
+      *Update (2026-08-19): stacked ensemble ported (`stacked.py`,
+      `bag models train-stacked --config config/models/stacked.yaml`),
+      using **regional-stacker** — the maintainer's own pre-existing
+      sklearn-compatible package
+      ([github.com/GalKepler/regional-stacker](https://github.com/GalKepler/regional-stacker),
+      pinned as a git dependency at tag `v1.0.0`; not yet on PyPI) —
+      rather than a from-scratch port. Wires the same TIV/sex-adjustment
+      wrapper and grouped-CV eval harness `baseline.py` uses; region
+      grouping (`build_region_mapping` in `tabular.py`) collapses the flat
+      `atlas__region__metric` columns into one region block per
+      `atlas__region` (432 regions from the current CAT12 export) for the
+      stacker's per-region base learners.
+
+      **Caught and fixed a real bug the same day**, flagged by the
+      maintainer during review of the review notebook: `build_region_matrix`
+      had no metric filter, so the "flat" `linear`/`ridge` baselines were
+      silently getting **GM+WM+CSF volumes concatenated into one
+      undifferentiated flat vector** (1296 columns) — not the GM-volumes-only
+      model `docs/DESIGN.md` §4.1 describes ("CAT12 GM volumes,
+      neuromorphometrics atlas"). Fixed: `build_region_matrix(..., metrics=
+      [...])` now filters explicitly; every `config/models/*.yaml` carries
+      its own `features.metrics` (baselines: `[vol_gm]`; `stacked.yaml`:
+      `[vol_gm, vol_wm, vol_csf]`) so the feature spec is config-visible and
+      MLflow-logged, not implicit in which script ran. **This changes the
+      leaderboard conclusion**: re-run against the real DB with the fix,
+      ridge (GM-only) is MAE≈5.0-5.1y raw — worse than before, because it
+      lost the WM/CSF columns it was wrongly getting — while the stacked
+      ensemble (all three metrics, correctly grouped per region) is MAE≈4.7-
+      4.8y raw and is now **the leaderboard leader**, which is the result
+      the stacked-ensemble design was supposed to produce (multi-metric
+      fusion per region beats a single metric). RidgeCV base + RidgeCV meta,
+      no hyperparameter search beyond RidgeCV's internal alpha grid. Bias
+      correction verified sound on both models (BAG-age slope flattens to
+      ~0 post-correction on each). **Diagnostic worth carrying forward**: on
+      both models, `mae_corrected` is *worse* than `mae_raw` even though the
+      correction properly flattens the BAG-age slope — the known
+      Cole-correction tradeoff (an affine transform optimized to remove
+      age-dependent bias, not MAE), not a bug. Sex effect in corrected BAG
+      reproduces on the stacked model too (same direction/magnitude as
+      ridge). Review notebook: `notebooks/stacked_ensemble_review.ipynb`
+      (leaderboard incl. stacked vs. baselines on their correct feature
+      specs → diagnostics → per-region CV-R² inspection via
+      `regional_stacker`'s `region_cv_scores_` → MLflow). Not yet done:
+      non-linear base/meta estimators (LightGBM base learners per region),
+      wider hyperparameter search, SFCN fine-tune, model registry.*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
 - [ ] **Phase 4 — Web app:** preprocessing container, upload→queue→worker→report
