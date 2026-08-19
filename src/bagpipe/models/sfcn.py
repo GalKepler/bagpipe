@@ -34,6 +34,23 @@ from bagpipe.models.tabular import build_image_matrix
 DEFAULT_CHANNELS = [32, 64, 128, 256, 256, 64]
 
 
+def _remap_ukb_pretrained_state_dict(state: dict) -> dict:
+    """UKB checkpoint (github.com/ha-ha-ha-han/UKBiobank_deep_pretrain) keys
+    `module.feature_extractor.conv_{i}.0/1.*` -> our `blocks.{i}.0/1.*`
+    (Conv3d/BatchNorm3d are sub-indices 0/1 in each block's Sequential).
+    The `module.classifier.conv_6.*` 40-bin age-classification head has no
+    equivalent in our 1-unit regression head and is dropped.
+    """
+    remapped = {}
+    for key, value in state.items():
+        if not key.startswith("module.feature_extractor.conv_"):
+            continue
+        rest = key.removeprefix("module.feature_extractor.conv_")
+        block_i, tail = rest.split(".", 1)
+        remapped[f"blocks.{block_i}.{tail}"] = value
+    return remapped
+
+
 class SFCN(nn.Module):
     """5 conv-bn-maxpool-relu blocks + 1 conv-bn-relu block + GAP + linear."""
 
@@ -43,7 +60,14 @@ class SFCN(nn.Module):
         in_ch = 1
         for i, out_ch in enumerate(channel_number):
             is_last = i == len(channel_number) - 1
-            layer = [nn.Conv3d(in_ch, out_ch, kernel_size=3, padding=1), nn.BatchNorm3d(out_ch)]
+            # Last block is 1x1x1 (no further spatial reduction), matching
+            # the UKB-pretrained checkpoint's conv_5 — required for
+            # `pretrained_weights_path` to load, not just a style choice.
+            kernel_size, padding = (1, 0) if is_last else (3, 1)
+            layer = [
+                nn.Conv3d(in_ch, out_ch, kernel_size=kernel_size, padding=padding),
+                nn.BatchNorm3d(out_ch),
+            ]
             if not is_last:
                 layer += [nn.MaxPool3d(2), nn.ReLU(inplace=True)]
             else:
@@ -185,7 +209,16 @@ class SFCNRegressor:
         model = SFCN(channel_number=self.channel_number, dropout=self.dropout)
         if self.pretrained_weights_path:
             state = torch.load(self.pretrained_weights_path, map_location="cpu")
-            model.load_state_dict(state, strict=False)
+            state = _remap_ukb_pretrained_state_dict(state)
+            missing, unexpected = model.load_state_dict(state, strict=False)
+            # head.* must be missing (fresh-init regression head, expected);
+            # anything else missing/unexpected means the remap silently
+            # failed to load a block, which no downstream metric will flag.
+            missing = [k for k in missing if not k.startswith("head.")]
+            if missing or unexpected:
+                raise RuntimeError(
+                    f"pretrained weight load left mismatches — missing={missing} unexpected={unexpected}"
+                )
         return model.to(self.device)
 
     def fit(self, X: np.ndarray, y: np.ndarray, callback=None) -> SFCNRegressor:

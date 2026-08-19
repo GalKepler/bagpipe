@@ -36,6 +36,29 @@ class ModelRegistry(Base):
     trained_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class Prediction(Base):
+    """Per-session BAG values, traceable to the `models_registry` row that
+    produced them (DESIGN.md §3.2). One row per (model, session): re-running
+    persist_predictions for the same model_id replaces its rows."""
+
+    __tablename__ = "predictions"
+    __table_args__ = (
+        UniqueConstraint("model_id", "subject_key", "session_id", name="uq_prediction_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[int] = mapped_column(Integer, index=True)
+    subject_key: Mapped[str] = mapped_column(String, index=True)
+    session_id: Mapped[str | None] = mapped_column(String, index=True)
+    fold: Mapped[int] = mapped_column(Integer)
+    age_true: Mapped[float] = mapped_column(Float)
+    predicted_age_raw: Mapped[float] = mapped_column(Float)
+    predicted_age_corrected: Mapped[float] = mapped_column(Float)
+    bag_raw: Mapped[float] = mapped_column(Float)
+    bag_corrected: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Feature(Base):
     __tablename__ = "features"
     __table_args__ = (

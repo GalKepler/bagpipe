@@ -29,8 +29,8 @@ SEX_MAP = {
 def build_region_matrix(
     datasets_dir: Path | None = None,
     metrics: list[str] | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
-    """Returns (X, y, groups, region_columns).
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], np.ndarray]:
+    """Returns (X, y, groups, region_columns, session_ids).
 
     X columns: region volumes (one per atlas/region/metric) followed by
     TIV, sex. Rows with missing age, sex, or TIV are dropped.
@@ -68,7 +68,8 @@ def build_region_matrix(
     X = table[[*region_columns, "TIV", "sex"]].to_numpy(dtype=float)
     y = table["age"].to_numpy(dtype=float)
     groups = table["subject_key"].to_numpy()
-    return X, y, groups, region_columns
+    session_ids = table["session_id"].to_numpy()
+    return X, y, groups, region_columns, session_ids
 
 
 def build_image_matrix(

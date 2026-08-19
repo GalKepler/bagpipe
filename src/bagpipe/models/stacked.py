@@ -36,7 +36,9 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     stacker_cfg = config["stacker"]
 
     metrics = config.get("features", {}).get("metrics")  # None = all metrics per region
-    X, y, groups, region_columns = build_region_matrix(get_path("datasets_dir"), metrics=metrics)
+    X, y, groups, region_columns, session_ids = build_region_matrix(
+        get_path("datasets_dir"), metrics=metrics
+    )
     region_mapping = build_region_mapping(region_columns)
 
     def stacker_fn():
@@ -87,6 +89,8 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
         "mlflow_run_id": mlflow_run.info.run_id,
         "model_fn": model_fn,
         "config": config,
+        "groups": groups,
+        "session_ids": session_ids,
     }
 
 

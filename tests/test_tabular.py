@@ -53,7 +53,7 @@ def test_build_region_matrix(tmp_path):
     regional.to_parquet(tmp_path / "regional.parquet")
     globals_df.to_parquet(tmp_path / "globals.parquet")
 
-    X, y, groups, region_columns = build_region_matrix(tmp_path)
+    X, y, groups, region_columns, session_ids = build_region_matrix(tmp_path)
 
     assert X.shape == (2, 4)  # 2 regions + TIV + sex
     assert region_columns == [
@@ -63,3 +63,4 @@ def test_build_region_matrix(tmp_path):
     assert list(y) == [45.0, 62.0]
     assert list(groups) == ["S1", "S2"]
     assert list(X[:, -1]) == [0.0, 1.0]  # sex encoded M=0, F=1
+    assert list(session_ids) == ["01", "01"]

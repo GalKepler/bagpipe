@@ -12,12 +12,38 @@ import cloudpickle
 
 from bagpipe.core.config import get_path
 from bagpipe.db.base import get_session, init_db
-from bagpipe.db.models import ModelRegistry
+from bagpipe.db.models import ModelRegistry, Prediction
 from bagpipe.models.tabular import build_region_matrix
 
 RUNNERS = {
     "stacked": "bagpipe.models.stacked",
 }
+
+
+def _persist_predictions(model_id: int, result, groups, session_ids) -> None:
+    """Store each fold's held-out (subject never seen in that fold's
+    training) predictions as this model's BAG values — real out-of-sample
+    numbers, not predictions from the full-data refit used for the artifact.
+    """
+    rows = result.predictions
+    with get_session() as session:
+        session.query(Prediction).filter_by(model_id=model_id).delete()
+        for row in rows.itertuples():
+            idx = row.index
+            session.add(
+                Prediction(
+                    model_id=model_id,
+                    subject_key=str(groups[idx]),
+                    session_id=str(session_ids[idx]),
+                    fold=int(row.fold),
+                    age_true=float(row.y_true),
+                    predicted_age_raw=float(row.y_pred_raw),
+                    predicted_age_corrected=float(row.y_pred_corrected),
+                    bag_raw=float(row.y_pred_raw - row.y_true),
+                    bag_corrected=float(row.y_pred_corrected - row.y_true),
+                )
+            )
+        session.commit()
 
 
 def promote(model_name: str, config_path: Path, version: str, stage: str = "production") -> ModelRegistry:
@@ -30,7 +56,7 @@ def promote(model_name: str, config_path: Path, version: str, stage: str = "prod
     result, info = runner.run(config_path)
 
     feature_cfg = info["config"].get("features", {})
-    X, y, _groups, _region_columns = build_region_matrix(
+    X, y, _groups, _region_columns, _session_ids = build_region_matrix(
         get_path("datasets_dir"), metrics=feature_cfg.get("metrics")
     )
     final_model = info["model_fn"]()
@@ -59,7 +85,12 @@ def promote(model_name: str, config_path: Path, version: str, stage: str = "prod
         session.add(entry)
         session.commit()
         session.refresh(entry)
-        return entry
+        model_id = entry.model_id
+
+    _persist_predictions(model_id, result, info["groups"], info["session_ids"])
+
+    with get_session() as session:
+        return session.get(ModelRegistry, model_id)
 
 
 if __name__ == "__main__":
