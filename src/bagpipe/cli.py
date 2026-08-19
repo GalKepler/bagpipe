@@ -12,6 +12,7 @@ def main() -> None:
     ingest_sub.add_parser("cat12", help="Ingest CAT12 T1w-derived tabular outputs")
     ingest_sub.add_parser("t1w-paths", help="Register T1w NIfTI paths for DL training")
     ingest_sub.add_parser("legacy-demographics", help="Ingest pre-SNBB cohort demographics")
+    ingest_sub.add_parser("events", help="Seed the events table from config/events.yaml")
 
     export = sub.add_parser("export", help="Export analytical tables")
     export_sub = export.add_subparsers(dest="export_command")
@@ -62,6 +63,13 @@ def main() -> None:
 
         summary = ingest_legacy_demographics()
         print(f"Legacy demographics ingest: {summary['rows_ingested']} rows")
+        return
+
+    if args.command == "ingest" and args.ingest_command == "events":
+        from bagpipe.db.ingest_events import ingest as ingest_events
+
+        summary = ingest_events()
+        print(f"Events ingest: {summary['rows_ingested']} rows")
         return
 
     if args.command == "export" and args.export_command == "training-table":

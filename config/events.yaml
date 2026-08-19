@@ -1,0 +1,39 @@
+# bag ingest events
+#
+# Public historical dates (not subject data) driving Pillar 3 causal
+# analyses (DESIGN.md §5). end_date: null means ongoing/no clean close date.
+# COVID has three separate national lockdown waves — kept as distinct events
+# rather than one span, since each is its own natural experiment with its
+# own severity/duration.
+events:
+  - name: oct7_war
+    category: conflict
+    start_date: 2023-10-07
+    end_date: null
+    description: >
+      Oct 7 2023 attack and the subsequent war. No clean end date within
+      the current data window; treat as an open-ended post period.
+  - name: judicial_reform
+    category: political
+    start_date: 2023-01-01
+    end_date: 2023-10-06
+    description: >
+      2023 judicial-reform protest period, ending the day before the war
+      onset. Confounded with oct7_war for any subject scanned after
+      2023-10-07 — event-study/placebo checks should account for this
+      adjacency, not just the DiD point estimate.
+  - name: covid_lockdown_1
+    category: pandemic
+    start_date: 2020-03-19
+    end_date: 2020-05-04
+    description: Israel's first national COVID-19 lockdown.
+  - name: covid_lockdown_2
+    category: pandemic
+    start_date: 2020-09-18
+    end_date: 2020-10-18
+    description: Israel's second national COVID-19 lockdown.
+  - name: covid_lockdown_3
+    category: pandemic
+    start_date: 2020-12-27
+    end_date: 2021-02-07
+    description: Israel's third national COVID-19 lockdown.

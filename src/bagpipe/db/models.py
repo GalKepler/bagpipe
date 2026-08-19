@@ -59,6 +59,23 @@ class Prediction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class Event(Base):
+    """Named date ranges driving Pillar 3 causal analyses (DESIGN.md §5): Oct 7
+    war, COVID lockdown waves, judicial-reform period. `end_date` null means
+    ongoing/ill-defined end (e.g. the war). Seeded from `config/events.yaml`
+    via `bag ingest events` — dates are public historical fact, not subject
+    data, so they're safe to hardcode in that config."""
+
+    __tablename__ = "events"
+
+    event_id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True)
+    category: Mapped[str] = mapped_column(String)  # conflict | pandemic | political
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
+    description: Mapped[str | None] = mapped_column(String)
+
+
 class Feature(Base):
     __tablename__ = "features"
     __table_args__ = (
