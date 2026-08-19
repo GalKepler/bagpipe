@@ -97,6 +97,30 @@ same PR.**
       `events` table, deferred to Phase 3 kickoff).
 - [ ] **Phase 2 — Modeling:** eval harness + bias correction, tabular baselines,
       stacked ensemble port, SFCN fine-tune, MLflow, model registry.
+      *Status (2026-08-19): eval harness done (`src/bagpipe/models/evaluate.py`)
+      — subject-grouped `GroupKFold`, pluggable bias correction (`cole`/
+      `beheshti`/`none`), MAE/R² raw+corrected. TIV/sex region adjustment
+      (`covariate_adjustment.py`, residualized on train fold only). Tabular
+      baselines live (`baseline.py`, `bag models train-baseline --config
+      config/models/*.yaml`): `linear`, `ridge` (RidgeCV, alpha tuned
+      internally — **current best model**, MAE≈4.2y raw), `lightgbm` (kept
+      in code, dropped from the demo notebook per maintainer request — no
+      real accuracy edge over ridge here and much slower). MLflow logging
+      wired (local, SQLite-backed tracking store at `paths.mlflow_dir`).
+      Demo: `notebooks/baseline_model_demo.ipynb` (export → region matrix →
+      harness → leaderboard → prediction/BAG/sex diagnostics → MLflow).
+      **Fixed a real bug**: bias corrector was fitting on in-sample training
+      predictions, which barely corrects flexible models (LightGBM nearly
+      memorizes training data) — now fits on nested out-of-fold predictions
+      within the training fold. Verified: raw BAG-vs-age slope -0.29 (p≈0)
+      → corrected slope ~0.01 (n.s.). Finding worth carrying into Phase 3:
+      corrected BAG differs by sex (Female +0.63y vs Male -0.42y, p<0.0001,
+      n=2326/3124, Ridge model) — real, survives proper bias correction,
+      not an artifact. Not yet done: stacked ensemble port, SFCN fine-tune
+      (blocked on GPU driver, see Phase 0), model registry/promotion.
+      Also: `pyproject.toml` now excludes `notebooks/` from ruff lint
+      (exploration-only; pre-existing `db_review.ipynb` had unrelated lint
+      debt — nbstripout still handles their output hygiene).*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
 - [ ] **Phase 4 — Web app:** preprocessing container, upload→queue→worker→report
