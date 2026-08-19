@@ -169,6 +169,38 @@ same PR.**
       `regional_stacker`'s `region_cv_scores_` → MLflow). Not yet done:
       non-linear base/meta estimators (LightGBM base learners per region),
       wider hyperparameter search, SFCN fine-tune, model registry.*
+
+      *Update (2026-08-19): GPU driver/CUDA confirmed working (see
+      `docs/data_audit.md`) — Pillar 2's SFCN blocker is gone. Added
+      `torch`, `monai`, `nibabel` to `pyproject.toml`. SFCN scaffold ported
+      (`sfcn.py`, `bag models train-sfcn --config config/models/sfcn.yaml`):
+      regression-head SFCN (5 conv-bn-maxpool-relu blocks + 1 conv-bn-relu +
+      global-avg-pool + linear) — a documented simplification of the
+      paper's soft age-classification head, on the reasoning that it's
+      simpler and MAE-equivalent for a first working model; revisit if it
+      underperforms. `SFCNRegressor` is sklearn-compatible (`fit`/`predict`)
+      so it runs through the same `evaluate()` grouped-CV + bias-correction
+      harness as the tabular/stacked models — same non-negotiable rules
+      apply, same MLflow logging. Input: `build_image_matrix()` in
+      `tabular.py` joins `image_paths.parquet`'s `image_path_mwp1` (CAT12 GM
+      density map, MNI space) against `globals.parquet` for age — 5,461 real
+      sessions have both. MONAI (`LoadImage`/`EnsureChannelFirst`/
+      `NormalizeIntensity`) handles loading/normalization, per the decided
+      stack (DESIGN.md §"Tech stack"). `pretrained_weights_path` is a config
+      slot for UKB-pretrained SFCN weights (DESIGN.md §4.2 fine-tuning plan)
+      but nothing auto-downloads them yet — from-scratch training only for
+      now. **Verified against real data**: ran `fit`/`predict` on 16 real
+      `sub-S######` sessions on the actual GPU (confirmed `device == cuda`);
+      pipeline runs end to end, join finds the expected session count.
+      Synthetic test suite: `tests/test_sfcn.py` (tiny random volumes, tiny
+      channels, 2 epochs — forward-shape check + fit/predict +
+      config-driven `run()` through the harness). **Not yet done**: an
+      actual multi-epoch training run at real scale (the verification run
+      above was 1 epoch on 16 sessions, not a trained model — full 5-fold
+      grouped CV × nested bias-correction CV over ~5,461 sessions is real
+      GPU-hours and hasn't been launched; needs a call on epochs/batch
+      size/runtime budget first), SFCN-vs-stacked leaderboard comparison,
+      model registry/promotion.*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
 - [ ] **Phase 4 — Web app:** preprocessing container, upload→queue→worker→report

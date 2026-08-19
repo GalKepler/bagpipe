@@ -9,11 +9,10 @@ names, or data content go in this file — structure and counts only.
 - CPU: 32 cores
 - RAM: 125 GiB
 - Python: 3.11.8, package manager: `uv` 0.9.28
-- GPU: NVIDIA GeForce RTX 3070 Ti (GA104) present on PCI bus, **driver not
-  loaded** — `nvidia-smi` fails ("couldn't communicate with the NVIDIA
-  driver"), no `nvidia` kernel module resident, no CUDA toolkit (`nvcc`) on
-  PATH. **Action needed before Pillar 2 (SFCN training): install/repair the
-  NVIDIA driver + CUDA toolkit matching the PyTorch build.**
+- GPU: NVIDIA GeForce RTX 3070 Ti (GA104). **Resolved (2026-08-19):** driver
+  595.84 loaded, `nvidia-smi` reports CUDA 13.2. `torch==2.13.0+cu130`
+  installed (`pyproject.toml`) and confirmed `torch.cuda.is_available() ==
+  True` with a real Conv3d smoke test on-device.
 - Local disk: `/` (nvme0n1p2) 457G, 68G free (85% used) — tight. **Resolved:**
   repo moved to `/media/storage/bagpipe` (local ext4, `/dev/sdb1`, 12T,
   6.2T free). `config/local.yaml` db_path/mlflow_dir/outputs all point there.
@@ -39,7 +38,7 @@ scheme and the mapping file/table to fill `id_map`.
 
 ## Open items
 
-- [ ] GPU driver/CUDA install (blocks Pillar 2, not Pillar 1)
+- [x] GPU driver/CUDA install — resolved, see above (2026-08-19)
 - [x] `tabular_cat12/` timestamp-ID folders resolved — legacy pre-SNBB
       cohort, no S#### ID exists, not a join problem. Modeled as parallel
       `legacy_participant`/`legacy_imaging_path` tables (see
@@ -62,7 +61,6 @@ scheme and the mapping file/table to fill `id_map`.
 
 ## Next steps
 
-1. Resolve GPU driver before Phase 2 modeling work starts.
-2. Verify backup status of the SMB derivative shares.
-3. qsirecon/dMRI ingestion (deferred — T1w-only for the current phase).
-4. `events` table + per-event longitudinal counts, ahead of Phase 3.
+1. Verify backup status of the SMB derivative shares.
+2. qsirecon/dMRI ingestion (deferred — T1w-only for the current phase).
+3. `events` table + per-event longitudinal counts, ahead of Phase 3.

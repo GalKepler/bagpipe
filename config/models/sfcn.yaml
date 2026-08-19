@@ -1,0 +1,26 @@
+# bag models train-sfcn --config config/models/sfcn.yaml
+#
+# Budget decision (2026-08-19): full rigor (n_splits=5 + nested Cole
+# bias-correction CV, 30 full trainings) benchmarks at ~51h on this GPU
+# (single RTX 3070 Ti, ~76ms/session/epoch @ batch_size=2) — too long.
+# Chose the ~7h overnight option instead: 5 outer folds only, no bias
+# correction (deferred to a follow-up run once architecture/hyperparams are
+# validated by this raw-MAE leaderboard number), epochs capped at 15 with
+# early-stopping patience=5. batch_size=2 because the 8GB card typically has
+# only ~5-6GB free (desktop session shares it) — batch_size=8 OOM'd.
+model:
+  epochs: 15
+  batch_size: 2
+  lr: 0.0001
+  weight_decay: 0.001
+  dropout: 0.5
+  num_workers: 6
+  val_fraction: 0.1
+  patience: 5
+  pretrained_weights_path: null # path to a downloaded UKB-pretrained SFCN checkpoint, if any
+  verbose: true # per-epoch train_loss/val_mae prints, for tracking an overnight run's progress
+bias_correction: none # deferred — see budget note above
+n_splits: 5
+mlflow:
+  experiment: bagpipe-baseline
+  run_name: sfcn-scratch-overnight-2026-08-19

@@ -71,6 +71,30 @@ def build_region_matrix(
     return X, y, groups, region_columns
 
 
+def build_image_matrix(
+    datasets_dir: Path | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Returns (paths, y, groups) for CNN input: `image_path_mwp1` (CAT12 GM
+    density map, MNI space) per session, joined against `globals.parquet` for
+    age. Rows with missing age or image path are dropped.
+    """
+    datasets_dir = datasets_dir or get_path("datasets_dir")
+    images = pd.read_parquet(datasets_dir / "image_paths.parquet")
+    globals_df = pd.read_parquet(datasets_dir / "globals.parquet")
+
+    table = images.merge(
+        globals_df[["subject_key", "session_id", "age"]],
+        on=["subject_key", "session_id"],
+        how="inner",
+    )
+    table = table.dropna(subset=["age", "image_path_mwp1"])
+
+    paths = table["image_path_mwp1"].to_numpy(dtype=object)
+    y = table["age"].to_numpy(dtype=float)
+    groups = table["subject_key"].to_numpy()
+    return paths, y, groups
+
+
 def build_region_mapping(region_columns: list[str]) -> dict[str, list[int]]:
     """Groups `region_columns` (format `atlas__region__metric`) by `atlas__region`.
 

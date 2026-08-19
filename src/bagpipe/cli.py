@@ -29,6 +29,10 @@ def main() -> None:
     train_stacked.add_argument(
         "--config", default="config/models/stacked.yaml", help="Path to stacked config YAML"
     )
+    train_sfcn = models_sub.add_parser("train-sfcn", help="Train the SFCN 3D CNN")
+    train_sfcn.add_argument(
+        "--config", default="config/models/sfcn.yaml", help="Path to SFCN config YAML"
+    )
 
     args = parser.parse_args()
 
@@ -77,6 +81,15 @@ def main() -> None:
 
         result, info = train_stacked_run(args.config)
         print(f"run: {info['run_name']} ({info['n_regions']} regions)")
+        for k, v in result.metrics.items():
+            print(f"  {k}: {v:.3f}")
+        return
+
+    if args.command == "models" and args.models_command == "train-sfcn":
+        from bagpipe.models.sfcn import run as train_sfcn_run
+
+        result, info = train_sfcn_run(args.config)
+        print(f"run: {info['run_name']} ({info['n_samples']} samples), log: {info['log_dir']}")
         for k, v in result.metrics.items():
             print(f"  {k}: {v:.3f}")
         return
