@@ -1,0 +1,9 @@
+# bag models train-baseline --config config/models/baseline.yaml
+model:
+  type: linear # linear | ridge | lightgbm
+  params: {}
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-baseline
+  run_name: null # defaults to "<model.type>-<bias_correction>"

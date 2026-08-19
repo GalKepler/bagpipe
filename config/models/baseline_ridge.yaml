@@ -1,0 +1,10 @@
+# bag models train-baseline --config config/models/baseline_ridge.yaml
+model:
+  type: ridge
+  params:
+    alphas: [0.001, 0.01, 0.1, 1.0, 10.0, 100.0, 1000.0] # RidgeCV picks the best via internal CV
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-baseline
+  run_name: ridge-cole

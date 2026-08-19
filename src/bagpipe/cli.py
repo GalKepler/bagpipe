@@ -17,6 +17,13 @@ def main() -> None:
     export_sub = export.add_subparsers(dest="export_command")
     export_sub.add_parser("training-table", help="Parquet tables for model training")
 
+    models = sub.add_parser("models", help="Train/evaluate models")
+    models_sub = models.add_subparsers(dest="models_command")
+    train_baseline = models_sub.add_parser("train-baseline", help="Train the tabular baseline")
+    train_baseline.add_argument(
+        "--config", default="config/models/baseline.yaml", help="Path to baseline config YAML"
+    )
+
     args = parser.parse_args()
 
     if args.command == "ingest" and args.ingest_command == "cat12":
@@ -48,6 +55,15 @@ def main() -> None:
 
         for name, s in export_training_table().items():
             print(f"{name}: {s['rows']} rows -> {s['out_path']}")
+        return
+
+    if args.command == "models" and args.models_command == "train-baseline":
+        from bagpipe.models.baseline import run as train_baseline_run
+
+        result, info = train_baseline_run(args.config)
+        print(f"run: {info['run_name']} ({len(info['region_columns'])} regions)")
+        for k, v in result.metrics.items():
+            print(f"  {k}: {v:.3f}")
         return
 
     parser.print_help()

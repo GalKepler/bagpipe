@@ -1,0 +1,13 @@
+# bag models train-baseline --config config/models/baseline_lightgbm.yaml
+model:
+  type: lightgbm
+  params:
+    n_estimators: 300
+    max_depth: 4
+    learning_rate: 0.05
+    verbosity: -1
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-baseline
+  run_name: lightgbm-cole
