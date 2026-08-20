@@ -221,6 +221,36 @@ same PR.**
       way `stacked.run()` now does. Not yet done: SFCN comparison before
       considering a v2 promotion, `predictions` table (BAG values aren't
       yet persisted per-prediction, only aggregate CV metrics).*
+
+      *Update (2026-08-19/20): SFCN scratch training completed and its
+      architecture ablated. First completed scratch run
+      (`sfcn-scratch-overnight-2026-08-19c`) swapped BatchNorm3d for
+      GroupNorm (theory: batch_size=2, forced by 8GB VRAM, gives BatchNorm
+      too-noisy running stats), added AMP and train-only flip+affine
+      augmentation, and fixed a real leakage bug — the inner train/val split
+      used for early stopping was plain-random, not subject-grouped,
+      violating the non-negotiable grouped-CV rule at the inner level even
+      though the outer harness enforced it correctly (`sfcn.py`). Result:
+      mae_raw≈7.45y — worse than the stacked ensemble (4.7-4.8y). Maintainer
+      asked to revert to an earlier, better-looking run; checked first and
+      that run was invalid to compare against on two counts — it was killed
+      early (fold 1, epoch 2) so it never produced a final `mae_raw` at all,
+      and even its logged per-epoch numbers were the *inner* early-stopping
+      split's MAE (not the outer test metric), measured under the leaky
+      split this commit fixed. Instead made `norm` config-driven
+      (`model.norm: group|batch`) and ran a fair ablation, same split/
+      epochs/budget, only the norm layer differing
+      (`sfcn-scratch-batchnorm-ablation-2026-08-20`). **BatchNorm won
+      decisively**: mae_raw≈4.68y, beating GroupNorm by a wide margin and
+      landing on par with the stacked ensemble — the noisy-running-stats
+      theory was never actually validated and turned out wrong here.
+      `norm: batch` is now `sfcn.yaml`'s default. Also added
+      `accumulation_steps` (gradient accumulation, default 1/no-op) as an
+      unused-so-far lever for the batch_size=2 VRAM ceiling. Not yet done:
+      SFCN-vs-stacked promotion decision (SFCN now competitive but not yet
+      wired into `promote.py`'s `RUNNERS`), TIV/sex covariate fusion, LR
+      schedule, soft age-classification head — all flagged as future
+      levers, none blocking.*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
       *Status (2026-08-19): kickoff started. `events` table added
@@ -245,8 +275,34 @@ same PR.**
       dose gradient, is a domain call — needs the maintainer, not assumed
       in the notebook. All designs currently run binary post/pre only until
       that's resolved.*
-- [ ] **Phase 4 — Web app:** preprocessing container, upload→queue→worker→report
-      pipeline, consent/deletion logic.
+- [ ] **Phase 4 — Web app:** Apptainer CAT12 preprocessing image, upload→queue
+      →worker→report pipeline, consent/deletion logic.
+      *Status (2026-08-19): kicked off early (maintainer request) — pipeline
+      skeleton is real code, not just a plan. `bagpipe.app.pipeline.run()`
+      chains DICOM-or-NIfTI → dcm2niix → pydeface → CAT12 (Apptainer,
+      `container/cat12.def`) → `bagpipe.app.cat12_parse` (ported from the
+      maintainer's private `update_tabular_cat12.py`) → prediction against
+      the promoted model, vectorized onto its exact training columns
+      (`bagpipe.models.tabular.region_columns_for`, new) → Cole bias
+      correction fit live from that model's own stored `predictions` rows
+      (no new corrector-persistence step) → regional age/sex/TIV-adjusted
+      z-scores (`bagpipe.app.normative`, the maintainer's separate
+      `normative` project's approach ported in-line, not depended on).
+      FastAPI app (`bagpipe.app.api`, `bag app serve`) exposes `POST
+      /predict`, synchronous for now. Synthetic tests pass (10 new,
+      `tests/test_cat12_parse.py`, `tests/test_normative.py`,
+      `tests/test_pipeline.py`, `test_tabular.py::test_region_columns_for`);
+      full suite (27) + ruff clean. **Not yet verified against real data or
+      a real CAT12 container** — `container/cat12.def` documents the
+      Apptainer build (`Bootstrap: docker`, Ubuntu 22.04 base) but the CAT12
+      standalone MCR install is a manual, license-gated download not
+      scripted into `%post`; until a `.sif` is built at
+      `paths.cat12_apptainer_image`, `run_cat12()` is untestable end-to-end.
+      Not yet done: job queue (currently runs in-request, will time out on
+      a real ~tens-of-minutes CAT12 run), HTML/PDF report template, email
+      delivery, consent/deletion logic, and a real-data verification pass
+      (run against an actual scan through the built container) before
+      calling any of this done.*
 
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.

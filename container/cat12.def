@@ -1,0 +1,90 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Maintainer bagpipe
+    Purpose "CAT12 standalone (MCR) preprocessing, bit-identical to training preprocessing — DESIGN.md §6"
+
+%help
+    Runs CAT12 segmentation (T1w -> mwp1/mwp2/mwp3 + ROI/global XML report)
+    against a single NIfTI, no MATLAB license required (MCR-bundled
+    standalone build). Must stay pinned to the exact CAT12 version used to
+    produce training features (currently CAT12.9_2577, see CLAUDE.md
+    "Machine-specific facts") — a version drift here silently biases every
+    public prediction relative to the model it's served against.
+
+    BEFORE BUILDING — both downloads are behind a login wall (Neuro Debian /
+    dbm.neuro.uni-jena.de account), so this file can't fetch them. Stage
+    them next to this .def file (both git-ignored, see .gitignore):
+
+      1. container/cat12_standalone.zip
+         CAT12.9_2577 standalone package, Linux (glnxa64) build, from
+         https://neuro-jena.github.io/cat12-help/ (Standalone version
+         section) — must be the *exact* 2577 revision, not "latest".
+
+      2. container/mcr_R2017b.zip  (skip if your standalone zip already
+         bundles an MCR/ subdirectory — check its contents first)
+         Matching MATLAB Compiler Runtime for the MATLAB version CAT12.9
+         was compiled against (R2017b / v93 as of this CAT12 release —
+         confirm against the standalone package's own README, versions do
+         shift between CAT12 releases). From
+         https://www.mathworks.com/products/compiler/matlab-runtime.html
+
+    Then:  apptainer build cat12.sif container/cat12.def
+
+    Usage:
+        apptainer run --bind /path/to/workdir:/data cat12.sif /data/t1w.nii.gz
+
+    Output: /data/report/cat_<stem>.xml, /data/report/catROI_<stem>.xml
+    (parsed by bagpipe.app.cat12_parse).
+
+%files
+    cat12_standalone.zip /opt/cat12_standalone.zip
+    mcr_R2017b.zip /opt/mcr.zip
+
+%post
+    apt-get update && apt-get install -y --no-install-recommends \
+        unzip ca-certificates libxext6 libxt6 libxmu6 \
+        && rm -rf /var/lib/apt/lists/*
+
+    mkdir -p /opt/cat12 /opt/mcr /data
+
+    if [ ! -s /opt/cat12_standalone.zip ]; then
+        echo "container/cat12_standalone.zip missing — see %help" >&2
+        exit 1
+    fi
+    unzip -q /opt/cat12_standalone.zip -d /opt/cat12
+    rm /opt/cat12_standalone.zip
+
+    # MCR: either bundled inside the standalone zip already, or staged
+    # separately as mcr_R2017b.zip — handle both without guessing which.
+    if [ -s /opt/mcr.zip ]; then
+        unzip -q /opt/mcr.zip -d /opt/mcr
+        rm /opt/mcr.zip
+    fi
+
+    # Locate the actual entrypoint script and MCR root inside whatever
+    # directory layout the extracted packages used (varies by CAT12
+    # release) instead of hardcoding a path likely to be wrong.
+    run_script=$(find /opt/cat12 -maxdepth 3 -name "run_spm12.sh" | head -1)
+    mcr_root=$(find /opt/cat12 /opt/mcr -maxdepth 4 -type d -regex '.*/v[0-9]+' | head -1)
+    if [ -z "$run_script" ] || [ -z "$mcr_root" ]; then
+        echo "run_spm12.sh or MCR root not found after extraction — check" \
+             "container/cat12_standalone.zip / mcr_R2017b.zip contents match %help" >&2
+        exit 1
+    fi
+    echo "RUN_SCRIPT=$run_script" > /opt/cat12/paths.env
+    echo "MCR_ROOT=$mcr_root" >> /opt/cat12/paths.env
+    chmod +x "$run_script"
+
+%environment
+    export CAT12_DIR=/opt/cat12
+
+%runscript
+    if [ ! -f /opt/cat12/paths.env ]; then
+        echo "CAT12 not installed in this image — see container/cat12.def %help" >&2
+        exit 1
+    fi
+    . /opt/cat12/paths.env
+    exec "$RUN_SCRIPT" "$MCR_ROOT" \
+        -b /opt/cat12/cat_standalone_segment.m -a1 "$1" -a2 /data/report

@@ -9,6 +9,8 @@ mlruns/
 *.nii
 *.nii.gz
 *.dcm
+*.sif
+container/*.zip
 
 # python
 __pycache__/

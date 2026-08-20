@@ -72,6 +72,22 @@ def build_region_matrix(
     return X, y, groups, region_columns, session_ids
 
 
+def region_columns_for(metrics: list[str], datasets_dir: Path | None = None) -> list[str]:
+    """The `atlas__region__metric` column order `build_region_matrix` would
+    produce for `metrics` — i.e. what a promoted model's `X` columns are,
+    without needing age/sex/TIV or a merge. Used at inference time (Pillar
+    4) to align a single freshly-parsed session onto the trained column
+    space; `pivot_table`'s columns are alphabetically sorted, same as here.
+    """
+    datasets_dir = datasets_dir or get_path("datasets_dir")
+    regional = pd.read_parquet(
+        datasets_dir / "regional.parquet", columns=["atlas", "region", "metric"]
+    )
+    regional = regional[regional["metric"].isin(metrics)].drop_duplicates()
+    cols = regional["atlas"] + "__" + regional["region"] + "__" + regional["metric"]
+    return sorted(cols.unique().tolist())
+
+
 def build_image_matrix(
     datasets_dir: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

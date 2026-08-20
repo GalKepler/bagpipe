@@ -39,6 +39,12 @@ def main() -> None:
     promote.add_argument("--config", required=True, help="Path to model config YAML")
     promote.add_argument("--version", required=True, help="Version tag, e.g. v1")
 
+    app_cmd = sub.add_parser("app", help="Run the public BAG report web app")
+    app_sub = app_cmd.add_subparsers(dest="app_command")
+    serve = app_sub.add_parser("serve", help="Serve the FastAPI upload/predict app")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+
     args = parser.parse_args()
 
     if args.command == "ingest" and args.ingest_command == "cat12":
@@ -111,6 +117,12 @@ def main() -> None:
 
         entry = promote_run(args.name, args.config, version=args.version)
         print(f"promoted model_id={entry.model_id} {entry.name} {entry.version} -> {entry.stage}")
+        return
+
+    if args.command == "app" and args.app_command == "serve":
+        import uvicorn
+
+        uvicorn.run("bagpipe.app.api:app", host=args.host, port=args.port)
         return
 
     parser.print_help()

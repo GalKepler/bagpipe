@@ -54,20 +54,33 @@ def _remap_ukb_pretrained_state_dict(state: dict) -> dict:
 
 
 class SFCN(nn.Module):
-    """5 conv-gn-maxpool-relu blocks + 1 conv-gn-relu block + GAP + linear.
+    """5 conv-norm-maxpool-relu blocks + 1 conv-norm-relu block + GAP + linear.
 
-    GroupNorm, not BatchNorm3d: at batch_size=2 (forced by 8GB VRAM),
-    BatchNorm's running mean/var are estimated from 2 samples per step —
-    too noisy to be a useful normalizer and a likely cause of the unstable
-    UKB fine-tune run (2026-08-19). GroupNorm's stats are per-sample, so
-    it's invariant to batch size. Trade-off: breaks loading the UKB
-    checkpoint's BatchNorm3d weights (different state-dict shape) — fine
-    for now since that fine-tune is deprioritized (see sfcn.yaml note); if
-    revisited, `_remap_ukb_pretrained_state_dict` needs a norm-layer skip.
+    `norm` is config-driven ("batch" default, or "group"). GroupNorm was
+    tried first on the theory that BatchNorm's running mean/var, estimated
+    from only 2 samples/step at batch_size=2 (8GB VRAM ceiling), would be
+    too noisy — and was suspected (never confirmed) as the cause of the
+    unstable UKB fine-tune run (2026-08-19). A fair ablation on a completed,
+    leakage-free run (2026-08-20, `sfcn-scratch-batchnorm-ablation-2026-08-
+    20`) disproved that: BatchNorm's running average across a full epoch's
+    steps evidently overcomes the per-step noise fine, and it beat GroupNorm
+    by a wide margin (mae_raw 4.675 vs 7.447 — GroupNorm was never worth
+    the tradeoff below). `norm="group"` stays available since it's cheap to
+    keep. Trade-off of GroupNorm specifically: breaks loading the UKB
+    checkpoint's BatchNorm3d weights (different state-dict shape); if that
+    fine-tune path is revisited, `_remap_ukb_pretrained_state_dict` would
+    need a norm-layer skip.
     """
 
-    def __init__(self, channel_number: list[int] = DEFAULT_CHANNELS, dropout: float = 0.5):
+    def __init__(
+        self,
+        channel_number: list[int] = DEFAULT_CHANNELS,
+        dropout: float = 0.5,
+        norm: str = "batch",
+    ):
         super().__init__()
+        if norm not in ("group", "batch"):
+            raise ValueError(f"norm must be 'group' or 'batch', got {norm!r}")
         blocks = []
         in_ch = 1
         for i, out_ch in enumerate(channel_number):
@@ -76,13 +89,18 @@ class SFCN(nn.Module):
             # the UKB-pretrained checkpoint's conv_5 — required for
             # `pretrained_weights_path` to load, not just a style choice.
             kernel_size, padding = (1, 0) if is_last else (3, 1)
-            # GroupNorm needs num_groups to divide out_ch; 8 works for the
-            # real channel widths (all multiples of 32) but tests use tiny
-            # channel counts, so fall back to the largest divisor <= 8.
-            num_groups = next(g for g in (8, 4, 2, 1) if out_ch % g == 0)
+            if norm == "group":
+                # GroupNorm needs num_groups to divide out_ch; 8 works for
+                # the real channel widths (all multiples of 32) but tests
+                # use tiny channel counts, so fall back to the largest
+                # divisor <= 8.
+                num_groups = next(g for g in (8, 4, 2, 1) if out_ch % g == 0)
+                norm_layer = nn.GroupNorm(num_groups, out_ch)
+            else:
+                norm_layer = nn.BatchNorm3d(out_ch)
             layer = [
                 nn.Conv3d(in_ch, out_ch, kernel_size=kernel_size, padding=padding),
-                nn.GroupNorm(num_groups, out_ch),
+                norm_layer,
             ]
             if not is_last:
                 layer += [nn.MaxPool3d(2), nn.ReLU(inplace=True)]
@@ -164,6 +182,8 @@ class SFCNRegressor:
         lr: float = 1e-4,
         weight_decay: float = 1e-3,
         dropout: float = 0.5,
+        norm: str = "batch",
+        accumulation_steps: int = 1,
         channel_number: list[int] | None = None,
         num_workers: int = 4,
         val_fraction: float = 0.1,
@@ -180,6 +200,8 @@ class SFCNRegressor:
         self.lr = lr
         self.weight_decay = weight_decay
         self.dropout = dropout
+        self.norm = norm
+        self.accumulation_steps = accumulation_steps
         self.channel_number = channel_number or DEFAULT_CHANNELS
         self.num_workers = num_workers
         self.val_fraction = val_fraction
@@ -242,7 +264,7 @@ class SFCNRegressor:
         tmp_path.replace(self.log_dir / "loss_curve.png")  # atomic — never a half-written PNG
 
     def _build_model(self) -> SFCN:
-        model = SFCN(channel_number=self.channel_number, dropout=self.dropout)
+        model = SFCN(channel_number=self.channel_number, dropout=self.dropout, norm=self.norm)
         if self.pretrained_weights_path:
             state = torch.load(self.pretrained_weights_path, map_location="cpu")
             state = _remap_ukb_pretrained_state_dict(state)
@@ -314,15 +336,26 @@ class SFCNRegressor:
             epoch_start = time.time()
             self.model_.train()
             batch_losses = []
-            for volumes, ages in train_loader:
+            optimizer.zero_grad()
+            for step, (volumes, ages) in enumerate(train_loader):
                 volumes, ages = volumes.to(self.device), ages.to(self.device)
-                optimizer.zero_grad()
                 with torch.autocast(device_type=self.device, enabled=use_amp):
                     loss = loss_fn(self.model_(volumes), ages)
-                scaler.scale(loss).backward()
+                # Gradient accumulation: batch_size=2 (8GB VRAM ceiling) is a
+                # noisy gradient estimate on its own; accumulating N steps
+                # before an optimizer.step() approximates a larger effective
+                # batch without the memory cost. Loss is divided so the
+                # accumulated gradient matches a true batch_size*N average.
+                scaler.scale(loss / self.accumulation_steps).backward()
+                if (step + 1) % self.accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                batch_losses.append(loss.item())
+            if (step + 1) % self.accumulation_steps != 0:
                 scaler.step(optimizer)
                 scaler.update()
-                batch_losses.append(loss.item())
+                optimizer.zero_grad()
             train_loss = float(np.mean(batch_losses))
 
             val_mae = self._eval_mae(val_loader) if val_loader is not None else None

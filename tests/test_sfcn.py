@@ -52,6 +52,36 @@ def test_sfcn_regressor_fit_predict(tmp_path):
     assert np.all(np.isfinite(preds))
 
 
+def test_sfcn_invalid_norm_raises():
+    with pytest.raises(ValueError, match="norm must be"):
+        SFCN(channel_number=TINY_CHANNELS, norm="layer")
+
+
+def test_sfcn_batchnorm_forward_shape():
+    import torch
+
+    model = SFCN(channel_number=TINY_CHANNELS, norm="batch")
+    out = model(torch.randn(2, 1, *SHAPE))
+    assert out.shape == (2,)
+
+
+def test_sfcn_regressor_batchnorm_and_accumulation(tmp_path):
+    paths, ages = _write_volumes(tmp_path)
+    reg = SFCNRegressor(
+        epochs=2,
+        batch_size=2,
+        accumulation_steps=2,
+        norm="batch",
+        channel_number=TINY_CHANNELS,
+        num_workers=0,
+        val_fraction=0.2,
+    )
+    reg.fit(paths, ages)
+    preds = reg.predict(paths)
+    assert preds.shape == ages.shape
+    assert np.all(np.isfinite(preds))
+
+
 def test_sfcn_regressor_fit_callback(tmp_path):
     paths, ages = _write_volumes(tmp_path)
     calls = []

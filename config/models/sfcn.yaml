@@ -26,12 +26,38 @@
 # used for early stopping was a plain random split, not subject-grouped —
 # violated the non-negotiable grouped-CV rule at the inner level even
 # though the outer harness enforced it correctly. All four in sfcn.py.
+#
+# Result (2026-08-19c, completed): mae_raw=mae_corrected=7.447 (bias
+# correction is "none" here, so those are identical by construction, not a
+# bug). Worse than the stacked ensemble (4.7-4.8y). Maintainer initially
+# read the earlier from-scratch run's lower val_mae (~3.5, in
+# outputs/mlruns/sfcn_runs/sfcn-scratch-overnight-2026-08-19/history.csv)
+# as a better baseline to revert to — but that run was killed early
+# (fold 1 epoch 1, see a861b73's own commit message: "its metrics are not
+# comparable to a completed run either way") AND used the leaky
+# non-grouped inner split this commit fixed, so its number is invalid on
+# two counts. No valid pre-fix baseline exists to compare against.
+# `norm` is now config-driven (`model.norm: group|batch`) instead of a
+# hardcoded swap, so BatchNorm was re-tried under the *correct* grouped
+# split in sfcn_batchnorm.yaml — a proper ablation of the one change above
+# that's actually easy to get wrong at batch_size=2.
+#
+# Result (2026-08-20, sfcn-scratch-batchnorm-ablation): mae_raw=mae_
+# corrected=4.675 — beats GroupNorm's 7.447 by a wide margin and lands on
+# par with the stacked ensemble (4.7-4.8y). The GroupNorm swap's rationale
+# (BatchNorm's per-step running stats are too noisy at batch_size=2) was
+# never actually validated and turned out wrong on a fair, completed
+# comparison — BatchNorm's running-average stats across the full epoch
+# apparently overcome the per-step noise fine here. Switching the default
+# back to `norm: batch`; GroupNorm stays available as an option, see
+# sfcn.py's SFCN docstring.
 model:
   epochs: 15
   batch_size: 2
   lr: 0.0001
   weight_decay: 0.001
   dropout: 0.5
+  norm: batch
   num_workers: 6
   val_fraction: 0.1
   patience: 5
@@ -41,4 +67,8 @@ bias_correction: none # deferred — see budget note above
 n_splits: 5
 mlflow:
   experiment: bagpipe-baseline
-  run_name: sfcn-scratch-overnight-2026-08-19c
+  # unchanged from sfcn_batchnorm.yaml on purpose: this config is now
+  # identical to the one that actually produced the 4.675 result above —
+  # re-running would log to the same completed run name, which is correct
+  # (idempotent re-run, not a new experiment).
+  run_name: sfcn-scratch-batchnorm-ablation-2026-08-20

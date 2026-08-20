@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from bagpipe.models.tabular import build_region_matrix
+from bagpipe.models.tabular import build_region_matrix, region_columns_for
 
 
 def test_build_region_matrix(tmp_path):
@@ -64,3 +64,24 @@ def test_build_region_matrix(tmp_path):
     assert list(groups) == ["S1", "S2"]
     assert list(X[:, -1]) == [0.0, 1.0]  # sex encoded M=0, F=1
     assert list(session_ids) == ["01", "01"]
+
+
+def test_region_columns_for(tmp_path):
+    regional = pd.DataFrame(
+        [
+            {"atlas": "a", "region": "R1", "metric": "vol_gm", "value": 1.0},
+            {"atlas": "a", "region": "R1", "metric": "vol_wm", "value": 1.0},
+            {"atlas": "a", "region": "R2", "metric": "vol_gm", "value": 1.0},
+        ]
+    )
+    regional.to_parquet(tmp_path / "regional.parquet")
+
+    assert region_columns_for(["vol_gm"], datasets_dir=tmp_path) == [
+        "a__R1__vol_gm",
+        "a__R2__vol_gm",
+    ]
+    assert region_columns_for(["vol_gm", "vol_wm"], datasets_dir=tmp_path) == [
+        "a__R1__vol_gm",
+        "a__R1__vol_wm",
+        "a__R2__vol_gm",
+    ]
