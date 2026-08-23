@@ -1,6 +1,11 @@
 # bag models train-stacked --config config/models/stacked.yaml
 features:
   metrics: [vol_gm, vol_wm, vol_csf] # all metrics, grouped per region (not flattened)
+  # thickness (surface, aparc_DK40/aparc_a2009s) is ingested but not in the
+  # default set yet: only 2/180 reprocessed sessions have surface output as
+  # of 2026-08-23 (reconstruction just enabled) — adding it here would drop
+  # ~all rows via build_region_matrix's dropna. Add once cohort coverage is
+  # real. See config/models/stacked_surface.yaml for an opt-in variant.
 stacker:
   base_estimator:
     type: ridgecv

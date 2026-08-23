@@ -1,11 +1,20 @@
-"""Ingest CAT12 T1w-derived tabular outputs into bagpipe's `features` table.
+"""Ingest CAT12 T1w-derived tabular outputs into bagpipe's `features` table,
+plus per-session QC profiles into `cat12_quality`.
 
-Walks paths.cat12_dir only (not qsiprep/qsirecon — dMRI is a later phase).
-Two file kinds per session, both long-format after parsing:
+Features: walks paths.cat12_dir only (not qsiprep/qsirecon — dMRI is a later
+phase). Two file kinds per session, both long-format after parsing:
   - *_desc-globals_morphometry.tsv   -> global scalars (TIV, vol_csf, vol_gm, vol_wm, vol_wmh)
   - atlas-*/*_param-{csf,gm,wm}_volmap.tsv -> per-ROI volume_ml, one row per region
 
-Idempotent: upserts on (uid, legacy_subject_id, session_id, source, atlas, region, metric).
+QC: walks paths.cat12_images_dir separately — the tabular export above never
+carried CAT12's raw `cat_*.xml` reports (confirmed against a real export,
+2026-08-23; its `_desc-globals_morphometry.json` sidecar's `source_file`
+points back at `cat12_images_dir` instead), so SIQR/NCR/ICR/resolution/
+WMH/CAT-version only exist there. Flat `sub-*/ses-*/anat/cat_*.xml` layout
+(this dir predates CAT12.9's BIDS-folder split into report/label subdirs).
+
+Idempotent: upserts on (uid, legacy_subject_id, session_id, source, atlas, region, metric)
+for features, (subject_key, session_id) for QC.
 """
 
 from __future__ import annotations
@@ -14,11 +23,12 @@ import re
 from pathlib import Path
 
 import pandas as pd
-from sqlalchemy.dialects.sqlite import insert
 
+from bagpipe.app.cat12_parse import parse_quality
 from bagpipe.core.config import get_path
 from bagpipe.db.base import get_engine, init_db
-from bagpipe.db.models import Feature
+from bagpipe.db.models import Cat12Quality, Feature
+from bagpipe.db.upsert import upsert_rows
 
 _SUB_RE = re.compile(r"sub-(S\d+|\d{12})$")
 _SES_RE = re.compile(r"ses-(\S+)$")
@@ -101,24 +111,64 @@ def collect_rows(cat12_dir: Path) -> list[dict]:
     return rows
 
 
-def ingest(cat12_dir: Path | None = None) -> dict:
+QUALITY_COLUMNS = [
+    "siqr_pct",
+    "siqr_grade",
+    "ncr",
+    "icr",
+    "res_rms_mm",
+    "contrast",
+    "gmv_tiv_pct",
+    "vol_abs_wmh",
+    "vol_rel_wmh",
+    "cat_version",
+    "cat_revision",
+]
+
+
+def collect_quality_rows(images_dir: Path) -> list[dict]:
+    """Each returned dict has every `QUALITY_COLUMNS` key (missing fields set
+    to `None`) so the batch insert below sees uniform columns across rows —
+    `parse_quality` itself omits fields a given run didn't report."""
+    rows: list[dict] = []
+    for sub_dir in sorted(images_dir.glob("sub-*")):
+        uid, legacy_id = _subject_ids(sub_dir.name)
+        if uid is None and legacy_id is None:
+            continue
+        subject_key = uid or legacy_id
+        for ses_dir in sorted(sub_dir.glob("ses-*")):
+            m = _SES_RE.match(ses_dir.name)
+            session_id = m.group(1) if m else None
+            anat_dir = ses_dir / "anat"
+            if not anat_dir.is_dir():
+                continue
+            for cat_xml in anat_dir.glob("cat_*.xml"):
+                quality = parse_quality(cat_xml)
+                if not quality:
+                    continue
+                row = {"subject_key": subject_key, "session_id": session_id, "source": "cat12"}
+                row.update({col: quality.get(col) for col in QUALITY_COLUMNS})
+                rows.append(row)
+    return rows
+
+
+def ingest(cat12_dir: Path | None = None, cat12_images_dir: Path | None = None) -> dict:
     cat12_dir = cat12_dir or get_path("cat12_dir")
+    cat12_images_dir = cat12_images_dir or get_path("cat12_images_dir")
     rows = collect_rows(cat12_dir)
+    quality_rows = collect_quality_rows(cat12_images_dir)
     init_db()
     engine = get_engine()
-    conflict_cols = ["subject_key", "session_id", "source", "atlas", "region", "metric"]
+    feature_conflict_cols = ["subject_key", "session_id", "source", "atlas", "region", "metric"]
     with engine.begin() as conn:
-        for i in range(0, len(rows), 500):
-            batch = rows[i : i + 500]
-            stmt = insert(Feature).values(batch)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=conflict_cols,
-                set_={"value": stmt.excluded.value},
-            )
-            conn.execute(stmt)
-    return {"rows_ingested": len(rows)}
+        upsert_rows(conn, Feature, rows, feature_conflict_cols)
+        upsert_rows(conn, Cat12Quality, quality_rows, ["subject_key", "session_id", "source"])
+    return {"rows_ingested": len(rows), "quality_rows_ingested": len(quality_rows)}
 
 
 if __name__ == "__main__":
     summary = ingest()
-    print(f"CAT12 ingest: {summary['rows_ingested']} rows")
+    print(
+        f"CAT12 ingest: {summary['rows_ingested']} feature rows, "
+        f"{summary['quality_rows_ingested']} QC rows"
+    )

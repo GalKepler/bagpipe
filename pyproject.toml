@@ -18,10 +18,14 @@ dependencies = [
     "torch>=2.13.0",
     "monai>=1.6.0",
     "nibabel>=5.4.2",
+    "scipy>=1.11",
     "statsmodels>=0.14",
     "fastapi>=0.110",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
+    "huey>=2.5",
+    "weasyprint>=69.0",
+    "pydeface>=2.1.0",
 ]
 
 [project.scripts]

@@ -1,0 +1,158 @@
+# bag preprocess cat12-cohort --config config/cat12_cohort.yaml
+# bag preprocess cat12-cohort-status --config config/cat12_cohort.yaml
+#
+# Bulk-reprocesses the SNBB BIDS tree through the same container/cat12.sif
+# used for Pillar 4 inference (docs/cat12_container_spec.md) — one
+# container, two callers, so segmentation params can't silently drift
+# between training and serving. Extra atlases/surface/thickness below are
+# feature-export options layered on top via `-a`, not segmentation
+# changes — they don't affect training-inference parity.
+#
+# Fail-safe / resumable by design (src/bagpipe/preprocess/cat12_cohort.py):
+# a SQLite ledger under output_derivatives_dir tracks per-subject status,
+# updated after every job — not just at the end. Just re-run the same
+# command after ANY interruption (crash, OOM, Ctrl+C, reboot, power loss)
+# and it picks up exactly where it left off: already-succeeded subjects
+# are never resubmitted, and real output on disk is independently checked
+# too (belt-and-suspenders — even a lost/corrupted ledger can't cause
+# already-finished work to be silently redone). One subject's bad/hanging
+# scan can't take down its neighbors: small batches, a hard per-job
+# timeout with a real process-group kill, and up to max_retries attempts
+# before a subject is set aside for manual triage (see cohort-status)
+# without blocking the rest of the cohort.
+#
+# IMPORTANT — run with `limit: 2` first. Real single-subject smoke tests
+# (2026-08-21) verified classic-mode output (what inference uses) lands in
+# mri/report/label subdirs, and that --writable-tmpfs is required — both
+# already baked into this driver. What's NOT yet empirically verified is
+# THIS driver's BIDS-redirect mode (output.BIDS.BIDSyes.BIDSfolder) — the
+# assumption that it produces flat output matching the historical
+# CAT12.9_2577.new tree comes from inspecting that old tree, not from an
+# actual test run through this container. If that assumption is wrong the
+# same way the classic-mode one was, `_expected_output_xml`'s check would
+# never find real output and every subject would look permanently failed —
+# annoying to discover 500 subjects in. Confirm with `limit: 2` before
+# setting it back to null for the real run.
+
+bids_root: /media/storage/yalab-dev/BIDS # local disk, not the SMB share (paths.bids_root =
+                                          # /mnt/62/Bids) — matches cat12_runner_new.m's own
+                                          # choice, avoids SMB latency across thousands of files
+output_derivatives_dir: /media/storage/yalab-dev/BIDS/derivatives/CAT12.cohort_2026_08
+    # PLACEHOLDER NAME — the real CAT version baked into outputs/containers/cat12.sif
+    # is confirmed as 26.0.rc3 r2874 (docs/cat12_container_spec.md §2), genuinely
+    # different from the existing CAT12.9_2577.new tree — rename to reflect that if
+    # you want. A FRESH dir either way — never point this at CAT12.9_2577.new, don't
+    # mix two CAT12 revisions' outputs in one tree.
+apptainer_image: null # falls back to paths.cat12_apptainer_image if null
+ledger_path: null # falls back to output_derivatives_dir/.bagpipe_cat12_ledger.sqlite if null —
+                   # the resume mechanism; don't delete it between runs unless you WANT
+                   # already-completed subjects re-verified from scratch (cheap, but pointless)
+limit: null # cap how many subjects ONE invocation launches — set to e.g. 2 for a first
+            # validation run (see the note below about unverified BIDS-redirect output),
+            # then set back to null for the real full-cohort run
+
+# CAT12's own internal parallelism (matlabbatch nproc, spread across the
+# files handed to ONE `apptainer run` call) x how many `apptainer run`
+# calls this driver runs concurrently. Total peak workers = nproc_per_job
+# * concurrency; each worker needs ~6-12GB RAM (up to 24GB pathological,
+# docs/cat12_container_spec.md §7) — size against actual free RAM, not
+# just core count. The old cat12_runner_new.m used nproc=5 on a
+# then-current machine; this workstation now has 32 cores (2026-08-21),
+# but don't just max out cores — check `free -h` first.
+nproc_per_job: 1
+concurrency: 12
+subjects_per_job: 1 # MUST stay 1 — real confirmed bug, 2026-08-22: CAT12 forks a
+                    # separate background subprocess per file whenever a job's data
+                    # list has more than one file, REGARDLESS of nproc_per_job — and
+                    # those forked processes' PIDs/log files can't be tracked inside
+                    # this container ("catlog_segment_....txt not exist after 60
+                    # seconds", "WARNING: CAT was not able to detect the PIDs of the
+                    # parallel CAT processes"), so every subject in a >1-file job
+                    # comes back Unknown/Unprocessed. Every single-file job has
+                    # succeeded; every multi-file job has failed identically. Real
+                    # parallelism comes from `concurrency` (separate apptainer
+                    # invocations), not from grouping files into one job — this
+                    # doesn't cost you throughput, only a little MCR-startup
+                    # overhead (~10-30s) per subject.
+max_retries: 2 # a subject stays eligible for automatic retry (transient failure,
+               # timeout) up to this many attempts before being left alone for
+               # manual triage — prevents one genuinely bad file from retrying forever
+timeout_minutes: 90 # hard wall-clock cap per job — a hung MCR process gets
+                    # SIGKILLed (whole process group, not just the top-level
+                    # apptainer process) rather than blocking a worker slot forever
+
+# Skip subjects CAT12 itself has already processed (checked against
+# output_derivatives_dir, not reimplemented path-existence heuristics in
+# Python) — safe to re-run this driver repeatedly, matches the "idempotent,
+# safe to re-run" convention for bagpipe ingestion modules. Independent of,
+# and in addition to, the ledger's own resumability above.
+skip_existing: false
+
+# Segmentation core (must match docs/cat12_container_spec.md §4 / the
+# inference container's baked-in defaults — these are ALREADY correct via
+# the shared batch_template.m, listed here only for visibility, not
+# re-applied by this driver).
+# affreg=mni, biasstr=0.5, APP=1070, vox=1.5 — shared, not overridden.
+
+# Feature-export additions for the cohort run only (appended via `-a`,
+# don't touch segmentation). Worth doing now because this is a one-time
+# per-subject cost paid during bulk reprocessing, not a per-inference-
+# request cost — unlike the inference container, which deliberately drops
+# all of this for latency (docs/cat12_container_spec.md §4).
+extra_batch_lines:
+  # Surface reconstruction + cortical thickness — ENABLED (root-caused +
+  # fixed 2026-08-23, was DISABLED before). Real cause: apptainer leaks the
+  # host's $SHELL (zsh) into the container by default; MATLAB's compiled
+  # runtime uses $SHELL to spawn every external system() call, including
+  # every CAT_* surface/thickness binary. zsh doesn't exist in the Ubuntu
+  # 22.04 container, so every such call failed with execve ENOENT — CAT12
+  # reported this as its generic "File permissions/binary compat/antivirus"
+  # message, which is what misdirected the earlier investigation toward the
+  # CTF-extraction/MCR_CACHE_ROOT theory below. Confirmed via strace (the
+  # actual `execve("/usr/bin/zsh", ...) = -1 ENOENT` calls) and fixed by
+  # passing `--env SHELL=/bin/bash` on every `apptainer run` invocation
+  # (bagpipe.app.pipeline.segment, bagpipe.preprocess.cat12_cohort — not a
+  # config-level fix, no action needed here beyond re-enabling these lines).
+  # Verified end-to-end: a real subject through this exact mechanism
+  # produced full surf/lh.*.gii + surf/rh.*.gii + thickness maps, no errors,
+  # SIQR 88.25% (B+), ~53min total (well under timeout_minutes above).
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.surface = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.surf_measures = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ct.native = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ct.warped = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.pp.native = 1;"
+
+  # Extra ROI atlases beyond the production Schaefer+Tian one — free to
+  # compute alongside the surface pass, unlocks future per-atlas base
+  # learners without reprocessing. neuromorphometrics is back ON here
+  # (unlike the inference container, where it's dead weight) since it's
+  # a one-time cost, not a per-request one, and it's a widely-used
+  # comparison atlas in the brain-age literature.
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ROImenu.atlases.neuromorphometrics = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ROImenu.atlases.lpba40 = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ROImenu.atlases.cobra = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ROImenu.atlases.thalamus = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ROImenu.atlases.thalamic_nuclei = 1;"
+  - "matlabbatch{1}.spm.tools.cat.estwrite.output.ROImenu.atlases.suit = 1;"
+  # hammers/ibsr deliberately left off, matching the prior working
+  # cat12_runner_new.m — no new reason to enable them.
+
+  # Surface ROI, production model's own Schaefer2018N400n7 parcellation:
+  # NOT done via CAT12's own-atlas surface batch field. Tried
+  # output.sROImenu.satlases.ownatlas (real smoke test, 2026-08-23) — it
+  # silently had no effect (catROIs_*.xml only ever had DK40/Destrieux;
+  # the ownatlas path never even showed up in cat_*.xml's own atlas
+  # registry, unlike the volume ownatlas above, which does). Root cause
+  # unconfirmed (CAT26's surface-ROI code is compiled/p-coded, not
+  # inspectable). Fixed instead in Python, post-hoc, from CAT12's own
+  # native thickness + sphere.reg output — see
+  # bagpipe.app.surface_atlas.custom_surface_regional (validated against
+  # CAT12's own DK40 output: max 0.003mm diff on ~2.5mm mean thickness).
+  # No batch line needed here — nothing to add, this is a downstream
+  # ingest-time computation, not a CAT12 processing option.
+  #
+  # NOT listed here (computed and appended by run_cat12_cohort.py itself,
+  # since they depend on resolved paths / the skip_existing flag above):
+  # output.BIDS.BIDSno / output.BIDS.BIDSyes.BIDSfolder (the redirect into
+  # output_derivatives_dir) and extopts.admin.lazy (CAT12's own
+  # already-processed skip check, gated on skip_existing).

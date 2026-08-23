@@ -17,6 +17,15 @@ paths:
   atlas_lut_file: /home/galkepler/Projects/qsiparc/data/derivatives/qsirecon/atlases/atlas-Schaefer2018N400n7Tian2020S2/atlas-Schaefer2018N400n7Tian2020S2_dseg.tsv
   cat12_apptainer_image: /media/storage/bagpipe/outputs/containers/cat12.sif  # built from container/cat12.def
   uploads_dir: /media/storage/bagpipe/outputs/uploads  # deleted per-job by default, see app.retain_uploads
+  jobs_db: /media/storage/bagpipe/outputs/jobs.db  # Huey SQLite queue store
+
+  # Custom surface atlas, computed post-hoc in Python from CAT12's own native
+  # output (bagpipe.app.surface_atlas) — CAT12's own-atlas surface batch field
+  # doesn't work in this build, see docs/cat12_container_spec.md §4b.
+  surface_atlas_lh_annot: /media/storage/bagpipe/container/atlas/lh.schaefer2018_400p_7n.annot
+  surface_atlas_rh_annot: /media/storage/bagpipe/container/atlas/rh.schaefer2018_400p_7n.annot
+  surface_atlas_lh_ref_sphere: /media/storage/bagpipe/container/atlas/lh.sphere.freesurfer.gii
+  surface_atlas_rh_ref_sphere: /media/storage/bagpipe/container/atlas/rh.sphere.freesurfer.gii
 
 app:
   smtp_host: null

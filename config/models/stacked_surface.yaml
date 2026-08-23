@@ -1,0 +1,22 @@
+# bag models train-stacked --config config/models/stacked_surface.yaml
+# Opt-in variant including cortical thickness (surf_DK40/surf_Destrieux).
+# Only meaningful once most of the cohort has been reprocessed with surface
+# reconstruction enabled (2/180 as of 2026-08-23) — build_region_matrix
+# drops any session missing a metric column, so running this now trains on
+# ~2 sessions.
+features:
+  metrics: [vol_gm, vol_wm, vol_csf, thickness]
+stacker:
+  base_estimator:
+    type: ridgecv
+  meta_estimator:
+    type: ridgecv
+  outer_cv: 5
+  inner_cv: 3
+  n_jobs: -1
+  random_state: 0
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-baseline
+  run_name: stacked-ridgecv-cole-surface

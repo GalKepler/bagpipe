@@ -6,79 +6,265 @@ From: ubuntu:22.04
     Purpose "CAT12 standalone (MCR) preprocessing, bit-identical to training preprocessing — DESIGN.md §6"
 
 %help
-    Runs CAT12 segmentation (T1w -> mwp1/mwp2/mwp3 + ROI/global XML report)
+    Runs CAT12 segmentation (T1w -> mwp1/p0/catROI + global XML report)
     against a single NIfTI, no MATLAB license required (MCR-bundled
-    standalone build). Must stay pinned to the exact CAT12 version used to
-    produce training features (currently CAT12.9_2577, see CLAUDE.md
-    "Machine-specific facts") — a version drift here silently biases every
-    public prediction relative to the model it's served against.
+    standalone build). Deliberately NOT re-pinned to the exact CAT12.9_2577
+    revision used for existing SNBB training features — the maintainer is
+    moving to a newer CAT12 release and will re-extract SNBB training
+    features with this same container later (docs/DESIGN.md §6's
+    interpretation rule already anticipates this: re-fit the side that's
+    cheaper to move, and re-training is cheaper than staying on stale
+    CAT12). Whichever revision is actually baked into this image, the §6
+    reproducibility test (docs/cat12_container_spec.md) is what proves it's
+    internally consistent — run it after every image change.
 
     BEFORE BUILDING — both downloads are behind a login wall (Neuro Debian /
-    dbm.neuro.uni-jena.de account), so this file can't fetch them. Stage
-    them next to this .def file (both git-ignored, see .gitignore):
+    dbm.neuro.uni-jena.de account for CAT12; MathWorks account for MCR), so
+    this file can't fetch them. Stage them next to this .def file (both
+    git-ignored, see .gitignore):
 
-      1. container/cat12_standalone.zip
-         CAT12.9_2577 standalone package, Linux (glnxa64) build, from
-         https://neuro-jena.github.io/cat12-help/ (Standalone version
-         section) — must be the *exact* 2577 revision, not "latest".
+      1. container/cat-standalone-Linux.zip
+         CAT12 standalone package, Linux (glnxa64) build, from
+         https://www.neuro.uni-jena.de/cat12/ (Standalone version). May be
+         double-zipped (a wrapper zip containing one inner zip) — %post
+         handles one extra nesting level automatically.
 
-      2. container/mcr_R2017b.zip  (skip if your standalone zip already
-         bundles an MCR/ subdirectory — check its contents first)
-         Matching MATLAB Compiler Runtime for the MATLAB version CAT12.9
-         was compiled against (R2017b / v93 as of this CAT12 release —
-         confirm against the standalone package's own README, versions do
-         shift between CAT12 releases). From
+      2. container/mcr.zip
+         Either an already-installed MATLAB Runtime tree (a directory
+         containing a `v###/` subdir, e.g. copied from another machine,
+         used as-is), OR a raw MathWorks Runtime installer package (run
+         silently during the build). Get the version your standalone
+         zip's own readme.txt says it needs — confirmed R2023b/v232 for
+         the CAT12.9 R2023b build as of 2026-08-21, but check yours, don't
+         trust this comment on a future CAT12 version. From
          https://www.mathworks.com/products/compiler/matlab-runtime.html
 
     Then:  apptainer build cat12.sif container/cat12.def
 
     Usage:
-        apptainer run --bind /path/to/workdir:/data cat12.sif /data/t1w.nii.gz
+        apptainer run --bind /path/to/workdir:/data cat12.sif /data/T1w.nii.gz
 
-    Output: /data/report/cat_<stem>.xml, /data/report/catROI_<stem>.xml
-    (parsed by bagpipe.app.cat12_parse).
+    Output: classic (non-BIDS) CAT12 layout, flat next to the input —
+    /data/cat_T1w.xml, /data/catROI_T1w.xml, /data/mwp1T1w.nii, etc.
+    (parsed by bagpipe.app.cat12_parse). BIDS output mode is patched off
+    (see %post) to match this — CAT12.9's default batch has it on, which
+    would nest outputs into a different layout and break the workspace
+    contract in docs/design_inference_pipeline.md.
 
 %files
-    cat12_standalone.zip /opt/cat12_standalone.zip
-    mcr_R2017b.zip /opt/mcr.zip
+    # Source paths are relative to the CWD apptainer build is invoked from
+    # (not this .def file's own directory) — %help documents running from
+    # the repo root, so these are container/-prefixed to match.
+    container/cat-standalone-Linux.zip /opt/cat_standalone_download.zip
+    container/mcr.zip /opt/mcr_download.zip
+    container/atlas/schaefer2018n400n7tian2020s2.nii /opt/atlas_src/schaefer2018n400n7tian2020s2.nii
+    container/atlas/schaefer2018n400n7tian2020s2.csv /opt/atlas_src/schaefer2018n400n7tian2020s2.csv
+    container/atlas/lh.schaefer2018_400p_7n.annot /opt/atlas_src/lh.schaefer2018_400p_7n.annot
+    container/atlas/rh.schaefer2018_400p_7n.annot /opt/atlas_src/rh.schaefer2018_400p_7n.annot
 
 %post
     apt-get update && apt-get install -y --no-install-recommends \
         unzip ca-certificates libxext6 libxt6 libxmu6 \
         && rm -rf /var/lib/apt/lists/*
 
-    mkdir -p /opt/cat12 /opt/mcr /data
+    mkdir -p /opt/cat12_extract /opt/mcr_extract /opt/mcr /opt/atlas /opt/cat12 /data
 
-    if [ ! -s /opt/cat12_standalone.zip ]; then
-        echo "container/cat12_standalone.zip missing — see %help" >&2
+    # ------------------------------------------------------------------
+    # CAT12 standalone (possibly double-zipped — a wrapper zip containing
+    # one inner zip, e.g. CAT_R2023b_MCR_Linux.zip; handle one extra
+    # nesting level rather than hardcoding the inner name, since it
+    # varies by CAT12 release).
+    # ------------------------------------------------------------------
+    if [ ! -s /opt/cat_standalone_download.zip ]; then
+        echo "container/cat-standalone-Linux.zip missing — see %help" >&2
         exit 1
     fi
-    unzip -q /opt/cat12_standalone.zip -d /opt/cat12
-    rm /opt/cat12_standalone.zip
-
-    # MCR: either bundled inside the standalone zip already, or staged
-    # separately as mcr_R2017b.zip — handle both without guessing which.
-    if [ -s /opt/mcr.zip ]; then
-        unzip -q /opt/mcr.zip -d /opt/mcr
-        rm /opt/mcr.zip
+    unzip -q /opt/cat_standalone_download.zip -d /opt/cat12_extract
+    rm /opt/cat_standalone_download.zip
+    nested=$(find /opt/cat12_extract -maxdepth 1 -iname "*.zip" | head -1)
+    if [ -n "$nested" ]; then
+        unzip -q "$nested" -d /opt/cat12_extract
+        rm "$nested"
     fi
 
-    # Locate the actual entrypoint script and MCR root inside whatever
-    # directory layout the extracted packages used (varies by CAT12
-    # release) instead of hardcoding a path likely to be wrong.
-    run_script=$(find /opt/cat12 -maxdepth 3 -name "run_spm12.sh" | head -1)
-    mcr_root=$(find /opt/cat12 /opt/mcr -maxdepth 4 -type d -regex '.*/v[0-9]+' | head -1)
-    if [ -z "$run_script" ] || [ -z "$mcr_root" ]; then
-        echo "run_spm12.sh or MCR root not found after extraction — check" \
-             "container/cat12_standalone.zip / mcr_R2017b.zip contents match %help" >&2
+    # cat_standalone.sh is the real entrypoint (not run_spm*.sh directly —
+    # an earlier version of this file called run_spm*.sh with -a1/-a2
+    # misused as data-path/output-dir args, which is wrong; those flags
+    # are for EXTRA numbered <UNDEFINED> batch placeholders beyond the
+    # input file list). It derives its own SPMROOT from its path (parent
+    # of the standalone/ dir it lives in), so it must be invoked by its
+    # real extracted path, not a copy/symlink elsewhere.
+    cat_standalone_sh=$(find /opt/cat12_extract -maxdepth 4 -name "cat_standalone.sh" | head -1)
+    run_spm_sh=$(find /opt/cat12_extract -maxdepth 4 -regex '.*/run_spm[0-9]+\.sh' | head -1)
+    if [ -z "$cat_standalone_sh" ] || [ -z "$run_spm_sh" ]; then
+        echo "cat_standalone.sh or run_spm*.sh not found after extraction —" \
+             "check container/cat-standalone-Linux.zip contents match %help" >&2
         exit 1
     fi
-    echo "RUN_SCRIPT=$run_script" > /opt/cat12/paths.env
+    chmod +x "$cat_standalone_sh" "$run_spm_sh"
+
+    # ------------------------------------------------------------------
+    # MCR: either already an installed runtime tree (a v###/ dir — e.g.
+    # copied from another machine, no installer needed), or a raw
+    # MathWorks installer package that has to be run silently. Handle
+    # both since it's cheap and we don't control how the maintainer
+    # obtains it.
+    # ------------------------------------------------------------------
+    if [ ! -s /opt/mcr_download.zip ]; then
+        echo "container/mcr.zip missing — see %help" >&2
+        exit 1
+    fi
+    unzip -q /opt/mcr_download.zip -d /opt/mcr_extract
+    rm /opt/mcr_download.zip
+    mcr_root=$(find /opt/mcr_extract -maxdepth 4 -type d -regex '.*/\(v[0-9]+\|R[0-9][0-9][0-9][0-9][ab]\)' | head -1)
+    if [ -z "$mcr_root" ]; then
+        installer=$(find /opt/mcr_extract -maxdepth 2 -iname "install" -type f | head -1)
+        if [ -z "$installer" ]; then
+            echo "Neither an already-installed MCR runtime (a v###/ dir) nor a" \
+                 "MathWorks installer script found under the extracted" \
+                 "container/mcr.zip — check its contents" >&2
+            exit 1
+        fi
+        chmod +x "$installer"
+        "$installer" -mode silent -agreeToLicense yes -destinationFolder /opt/mcr
+        mcr_root=$(find /opt/mcr -maxdepth 2 -type d -regex '.*/\(v[0-9]+\|R[0-9][0-9][0-9][0-9][ab]\)' | head -1)
+        if [ -z "$mcr_root" ]; then
+            echo "MCR installer ran but produced no v###/ runtime dir —" \
+                 "check the installer's own log output above" >&2
+            exit 1
+        fi
+    fi
+
+    echo "CAT_STANDALONE_SH=$cat_standalone_sh" > /opt/cat12/paths.env
     echo "MCR_ROOT=$mcr_root" >> /opt/cat12/paths.env
-    chmod +x "$run_script"
+
+    # ------------------------------------------------------------------
+    # Atlas: lives at a fixed image path, NOT inside CAT12's own toolbox
+    # tree. CAT12 standalone's toolbox files are compiled into spm*.ctf
+    # (a MATLAB Compiler CTF archive) and aren't plain files on disk at
+    # build time — they only self-extract into an MCR cache on first run.
+    # ownatlas just needs a readable file path at runtime, so there's no
+    # need to inject it into CAT12's install tree at all.
+    # ------------------------------------------------------------------
+    # CAT12 looks for a same-named .csv next to the atlas .nii for region
+    # names — without it, the ROI report warns "Cannot find ... csv-file
+    # with region names!" (confirmed via a real smoke test, 2026-08-21).
+    # Not fatal for bagpipe's own parsing (cat12_parse.py does its own
+    # numeric-ID -> name mapping via atlas_lut_file), but no reason to
+    # ship an avoidable warning.
+    cp /opt/atlas_src/schaefer2018n400n7tian2020s2.nii /opt/atlas/
+    cp /opt/atlas_src/schaefer2018n400n7tian2020s2.csv /opt/atlas/
+
+    # Surface counterpart (regional values in the SAME Schaefer 400/7-network
+    # parcellation, but for surface ROI extraction — CAT12 only ships this
+    # atlas natively as 17-network on the surface side, matching the
+    # volume-side gap that ownatlas above already works around). FreeSurfer
+    # .annot files carry their own embedded region name table, so unlike the
+    # volume ownatlas there's no separate .csv to ship — verified via
+    # nibabel.freesurfer.io.read_annot against the real downloaded file
+    # (163842 vertices = fsaverage 164k, matching CAT12's own atlases_surfaces
+    # convention; 201 labels incl. background). Source:
+    # ThomasYeoLab/CBIG Schaefer2018_LocalGlobal, FreeSurfer5.3/fsaverage.
+    # Not wired into batch_template.m here — the production inference batch
+    # has output.surface=0 (patched below), so surface ROI extraction is
+    # irrelevant there. It's wired via config/cat12_cohort.yaml's
+    # extra_batch_lines (output.sROImenu.satlases.ownatlas), which is the
+    # only caller that runs the surface pipeline at all.
+    cp /opt/atlas_src/lh.schaefer2018_400p_7n.annot /opt/atlas/
+    cp /opt/atlas_src/rh.schaefer2018_400p_7n.annot /opt/atlas/
+
+    # ------------------------------------------------------------------
+    # Batch: patch CAT12's own bundled cat_standalone_segment.m in place
+    # (its many undocumented defaults are safer left alone than
+    # reimplemented from scratch) — override only the params confirmed
+    # against a real SNBB cat_*.xml report and real training output
+    # layout (docs/cat12_container_spec.md §4). Field names are matched
+    # by sed pattern, not hardcoded values, because they drift across
+    # CAT12 releases — e.g. this build uses opts.biasstr where the
+    # revision that produced SNBB features used opts.biasacc; sed only
+    # touches fields that actually appear in the bundled file, silently
+    # no-ops otherwise, so the fail-loud check below is what catches a
+    # renamed/missing field.
+    # ------------------------------------------------------------------
+    batch_src=$(find /opt/cat12_extract -maxdepth 4 -name "cat_standalone_segment.m" | head -1)
+    if [ -z "$batch_src" ]; then
+        echo "cat_standalone_segment.m not found in the standalone package —" \
+             "check container/cat-standalone-Linux.zip contents" >&2
+        exit 1
+    fi
+    cp "$batch_src" /opt/cat12/batch_template.m
+    sed -i \
+        -e "s#\(estwrite\.opts\.affreg = \)'[^']*';#\1'mni';#" \
+        -e "s#\(estwrite\.opts\.bias\(acc\|str\) = \)[0-9.eE+-]*;#\10.5;#" \
+        -e "s#\(estwrite\.extopts\.segmentation\.APP = \)[0-9]*;#\11070;#" \
+        -e "s#\(estwrite\.extopts\.registration\.vox = \)[0-9.]*;#\11.5;#" \
+        -e "s#\(estwrite\.output\.surface = \)[0-9]*;#\10;#" \
+        -e "s#\(estwrite\.output\.BIDS\.BIDSno = \)[0-9]*;#\10;#" \
+        -e "s#\(estwrite\.output\.ROImenu\.atlases\.neuromorphometrics = \)[0-9]*;#\10;#" \
+        -e "s#\(estwrite\.output\.ROImenu\.atlases\.cobra = \)[0-9]*;#\10;#" \
+        -e "s#\(estwrite\.output\.ROImenu\.atlases\.ownatlas = \).*#\1{'/opt/atlas/schaefer2018n400n7tian2020s2.nii'};#" \
+        -e "s#\(estwrite\.output\.GM\.mod = \)[0-9]*;#\11;#" \
+        -e "s#\(estwrite\.output\.WM\.mod = \)[0-9]*;#\11;#" \
+        /opt/cat12/batch_template.m
+    if ! grep -q "ownatlas = {'/opt/atlas/" /opt/cat12/batch_template.m; then
+        echo "sed patch of ownatlas field failed to apply — cat_standalone_segment.m's" \
+             "field layout changed in this CAT12 release, update the sed patterns above" >&2
+        exit 1
+    fi
+    echo "BATCH_TEMPLATE=/opt/cat12/batch_template.m" >> /opt/cat12/paths.env
+
+    # ------------------------------------------------------------------
+    # Surface reconstruction fix (root-caused 2026-08-23): CAT's surface
+    # binaries (CAT_VolMarchingCubes etc.) aren't plain files in the
+    # standalone package — they're bundled inside spm25.ctf and normally
+    # self-extracted by the MCR on first run into $MCR_CACHE_ROOT. Letting
+    # that extraction happen at RUNTIME, into ephemeral /tmp, is what was
+    # breaking surface processing ("File permissions are not correct");
+    # cross-checked against the working jhuguetn/cat12-docker r2665
+    # reference image, already used as this file's own reference for
+    # runscript syntax — it pre-extracts the CTF once at build time into a
+    # baked-in image path and sets MCR_INHIBIT_CTF_LOCK=1, so no runtime
+    # extraction (and no runtime lock/tmpfs fragility) happens at all.
+    # Mirroring that here: trigger extraction now (any invocation of the
+    # MCR binary extracts the CTF before it even parses its own args, so
+    # this is expected to exit non-zero on the bogus batch — that's fine,
+    # only the extraction side effect matters), into a fixed in-image path.
+    export MCR_CACHE_ROOT=/opt/cat12/mcr_cache
+    export MCR_INHIBIT_CTF_LOCK=1
+    mkdir -p "$MCR_CACHE_ROOT"
+    "$cat_standalone_sh" -m "$mcr_root" -b /opt/cat12/batch_template.m -pr 1 || true
+    # Contrary to the initial assumption above, the CTF self-extracts into
+    # an `spm25_mcr/` dir created NEXT TO the standalone package itself
+    # (i.e. under /opt/cat12_extract here), not under $MCR_CACHE_ROOT —
+    # confirmed by a real build (2026-08-23). That location is fine (baked
+    # into the image, found again at runtime without re-extracting); the
+    # actual bug is that extraction doesn't reliably restore the exec bit
+    # on the CAT_* surface binaries bundled inside it. Fix once here.
+    mcr_extract_dir=$(find /opt/cat12_extract -maxdepth 3 -type d -name "spm25_mcr" | head -1)
+    if [ -z "$mcr_extract_dir" ]; then
+        echo "CTF pre-extraction did not produce an spm25_mcr dir under" \
+             "/opt/cat12_extract — check the build output above" >&2
+        exit 1
+    fi
+    chmod -R a+rX "$mcr_extract_dir"
+    find "$mcr_extract_dir" -type f \( -iname "CAT_*" -o -iname "*.exe" \) -exec chmod a+x {} +
+    cat_bin_dir=$(find "$mcr_extract_dir" -maxdepth 14 -type d -iname "CAT.glnx86" | head -1)
+    if [ -z "$cat_bin_dir" ]; then
+        echo "spm25_mcr extracted but no CAT.glnx86 dir found inside it —" \
+             "toolbox layout may have changed" >&2
+        exit 1
+    fi
+    echo "pre-extracted + chmod'd CAT surface binaries at: $cat_bin_dir"
 
 %environment
     export CAT12_DIR=/opt/cat12
+    # Points at the CTF extraction baked into the image at build time (see
+    # %post) — not /tmp. No runtime CTF extraction happens at all anymore,
+    # which is what fixed surface reconstruction (2026-08-23): letting MCR
+    # extract the CTF fresh into ephemeral /tmp on every run was silently
+    # failing for the CAT_* surface binaries specifically.
+    export MCR_CACHE_ROOT=/opt/cat12/mcr_cache
+    export MCR_INHIBIT_CTF_LOCK=1
 
 %runscript
     if [ ! -f /opt/cat12/paths.env ]; then
@@ -86,5 +272,23 @@ From: ubuntu:22.04
         exit 1
     fi
     . /opt/cat12/paths.env
-    exec "$RUN_SCRIPT" "$MCR_ROOT" \
-        -b /opt/cat12/cat_standalone_segment.m -a1 "$1" -a2 /data/report
+    mkdir -p "$MCR_CACHE_ROOT"
+    # cat_standalone.sh handles <UNDEFINED> batch substitution itself —
+    # input file(s) are plain trailing positional args (matches its own
+    # documented usage and a real reference implementation,
+    # jhuguetn/cat12-docker). -pr 1 skips PDF/surface report rendering
+    # (no OpenGL in a headless container). Output lands flat next to each
+    # input (BIDS mode patched off above) — no output-dir arg exists.
+    #
+    # "$@" (not "$1") forwards every trailing arg, not just the first —
+    # this is what lets the same image serve two callers with different
+    # needs without drifting apart: bagpipe.app.pipeline.segment (inference,
+    # one file, no extra args, unaffected by this change) and
+    # scripts/run_cat12_cohort.py (bulk SNBB reprocessing, passes extra
+    # `-a "matlabbatch{...}=...;"` lines to turn on surface/thickness/extra
+    # atlases and multiple T1w files per invocation for CAT12's own
+    # internal nproc parallelism) — both share the exact same segmentation
+    # core (affreg/biasstr/APP/vox/atlas), which is the actual
+    # training-inference parity invariant DESIGN.md cares about; only
+    # optional OUTPUT/feature-export options differ per caller.
+    exec "$CAT_STANDALONE_SH" -m "$MCR_ROOT" -b "$BATCH_TEMPLATE" -pr 1 "$@"

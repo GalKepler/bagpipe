@@ -10,6 +10,7 @@ tree, since Pillar 4 predicts on one freshly-processed upload at a time.
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -17,6 +18,27 @@ import pandas as pd
 
 TISSUES = {"Vgm": "vol_gm", "Vwm": "vol_wm", "Vcsf": "vol_csf"}
 GLOBAL_METRICS = ["TIV", "vol_csf", "vol_gm", "vol_wm", "vol_wmh"]
+
+# catROIs_*.xml (surface, plural) holds per-region cortical thickness — a
+# separate file/schema from catROI_*.xml (volume, singular): one <data>
+# element per surface atlas tag, region labels in <names> (no LUT needed,
+# unlike the volume atlases), medial-wall/non-cortical regions (unknown,
+# corpuscallosum) reported as NaN and dropped here rather than propagated.
+SURFACE_ATLASES = {"aparc_DK40": "surf_DK40", "aparc_a2009s": "surf_Destrieux"}
+
+# Catlog text differs by CAT version — confirmed against real XML from both,
+# 2026-08-23: CAT12.9/2577 (training cohort) says "Image Quality Rating
+# (IQR): 79.50% (C+)", CAT26.0.rc3 (reprocessing cohort) says "Structural
+# Image Quality Rating (SIQR): 79.86% (C+)" — the "Structural " prefix and
+# "(SIQR)" are both new. An earlier fix here only matched the CAT26 wording
+# and silently dropped siqr_pct for every CAT12.9 row (0% pass rate on the
+# whole training cohort) — the "Structural " prefix must stay optional.
+# Percent + grade only live in this human-readable line, not a dedicated
+# XML tag.
+SIQR_LINE_RE = re.compile(
+    r"(?:Structural )?Image Quality Rating \(S?IQR\):\s*([\d.]+)%\s*\(([A-F][+-]?)\)"
+)
+GMV_TIV_LINE_RE = re.compile(r"Relative gray matter volume \(GMV/TIV\):\s*([\d.]+)%")
 
 
 def parse_regional(catroi_xml: Path, atlas_key: str, lut: pd.DataFrame) -> pd.DataFrame | None:
@@ -45,6 +67,29 @@ def parse_regional(catroi_xml: Path, atlas_key: str, lut: pd.DataFrame) -> pd.Da
     return df.drop(columns="index")
 
 
+def parse_surface_regional(catrois_xml: Path, atlas_key: str) -> pd.DataFrame | None:
+    """Returns a DataFrame with columns [label, thickness] for one surface
+    atlas tag (e.g. `aparc_DK40`), or None if that atlas/thickness data is
+    absent — a failed surface reconstruction shouldn't raise, since core ROI
+    volumes (the model's actual input) can still be valid."""
+    root = ET.parse(catrois_xml).getroot()
+    atlas = root.find(atlas_key)
+    if atlas is None:
+        return None
+    names_el = atlas.find("names")
+    data_el = atlas.find("data")
+    if names_el is None or data_el is None:
+        return None
+    thickness_el = data_el.find("thickness")
+    if thickness_el is None or not thickness_el.text:
+        return None
+    labels = [n.text for n in names_el]
+    raw = thickness_el.text.strip("[]").split(";")
+    values = [float(v) if v != "NaN" else float("nan") for v in raw]
+    df = pd.DataFrame({"label": labels, "thickness": values})
+    return df.dropna(subset=["thickness"])
+
+
 def parse_globals(cat_xml: Path) -> dict[str, float]:
     root = ET.parse(cat_xml).getroot()
     sm = root.find("subjectmeasures")
@@ -58,6 +103,55 @@ def parse_globals(cat_xml: Path) -> dict[str, float]:
         "vol_wm": wm,
         "vol_wmh": wmh,
     }
+
+
+def parse_quality(cat_xml: Path) -> dict[str, float | str]:
+    """QC profile from a `cat_*.xml` report: SIQR score/grade and GMV/TIV%
+    (catlog text, `SIQR_LINE_RE`/`GMV_TIV_LINE_RE`), NCR/ICR/resolution/
+    contrast (`qualitymeasures`), WMH burden (`subjectmeasures`), and CAT
+    version/revision (`software`). Any field CAT12 didn't report is omitted
+    rather than defaulted — a partial/older run shouldn't fabricate zeros.
+    """
+    root = ET.parse(cat_xml).getroot()
+    quality: dict[str, float | str] = {}
+
+    for item in root.iter("item"):
+        text = item.text or ""
+        m = SIQR_LINE_RE.search(text)
+        if m:
+            quality["siqr_pct"] = float(m.group(1))
+            quality["siqr_grade"] = m.group(2)
+        m = GMV_TIV_LINE_RE.search(text)
+        if m:
+            quality["gmv_tiv_pct"] = float(m.group(1))
+
+    qm = root.find("qualitymeasures")
+    if qm is not None:
+        for tag, key in [("NCR", "ncr"), ("ICR", "icr"), ("contrast", "contrast")]:
+            el = qm.find(tag)
+            if el is not None and el.text:
+                quality[key] = float(el.text)
+        rms_el = qm.find("res_RMS")
+        if rms_el is not None and rms_el.text:
+            quality["res_rms_mm"] = float(rms_el.text)
+
+    sm = root.find("subjectmeasures")
+    if sm is not None:
+        wmh_el = sm.find("vol_abs_WMH")
+        if wmh_el is not None and wmh_el.text:
+            quality["vol_abs_wmh"] = float(wmh_el.text)
+        wmh_rel_el = sm.find("vol_rel_WMH")
+        if wmh_rel_el is not None and wmh_rel_el.text:
+            quality["vol_rel_wmh"] = float(wmh_rel_el.text)
+
+    sw = root.find("software")
+    if sw is not None:
+        for tag, key in [("version_cat", "cat_version"), ("revision_cat", "cat_revision")]:
+            el = sw.find(tag)
+            if el is not None and el.text:
+                quality[key] = el.text.strip()
+
+    return quality
 
 
 def extract_features(

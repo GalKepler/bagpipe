@@ -76,6 +76,43 @@ class Event(Base):
     description: Mapped[str | None] = mapped_column(String)
 
 
+class Cat12Quality(Base):
+    """Per-session CAT12 QC profile — SIQR/NCR/ICR/resolution/contrast,
+    WMH burden, and CAT version provenance. Wide format (one row per
+    session), not the long-format `Feature` table, since these are session-
+    level QC facts rather than per-region metrics and `siqr_grade`/
+    `cat_version` are strings, which `Feature.value: Float` can't hold.
+    Front-facing use: Pillar 4 report/QC-gate diagnostics surfaced to the
+    user; also queryable here for the training/legacy cohort ingested via
+    `bag ingest cat12`. Keyed with `source` (e.g. "cat12" for the CAT12.9
+    training-era export, "cat12_v26" for the CAT26 reprocessing cohort) so
+    re-running the same subjects through a newer CAT version doesn't
+    silently clobber the older QC row — both stay queryable side by side
+    for version-drift comparison."""
+
+    __tablename__ = "cat12_quality"
+    __table_args__ = (
+        UniqueConstraint("subject_key", "session_id", "source", name="uq_cat12_quality_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_key: Mapped[str] = mapped_column(String, index=True)
+    session_id: Mapped[str | None] = mapped_column(String, index=True)
+    source: Mapped[str] = mapped_column(String, default="cat12")
+    siqr_pct: Mapped[float | None] = mapped_column(Float)
+    siqr_grade: Mapped[str | None] = mapped_column(String)
+    ncr: Mapped[float | None] = mapped_column(Float)
+    icr: Mapped[float | None] = mapped_column(Float)
+    res_rms_mm: Mapped[float | None] = mapped_column(Float)
+    contrast: Mapped[float | None] = mapped_column(Float)
+    gmv_tiv_pct: Mapped[float | None] = mapped_column(Float)
+    vol_abs_wmh: Mapped[float | None] = mapped_column(Float)
+    vol_rel_wmh: Mapped[float | None] = mapped_column(Float)
+    cat_version: Mapped[str | None] = mapped_column(String)
+    cat_revision: Mapped[str | None] = mapped_column(String)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class Feature(Base):
     __tablename__ = "features"
     __table_args__ = (

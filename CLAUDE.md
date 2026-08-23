@@ -251,6 +251,22 @@ same PR.**
       wired into `promote.py`'s `RUNNERS`), TIV/sex covariate fusion, LR
       schedule, soft age-classification head — all flagged as future
       levers, none blocking.*
+
+      *Update (2026-08-20): SFCN-vs-stacked promotion decision made.
+      Both evaluated on identical grouped 5-fold CV against real data:
+      stacked mae_raw≈4.696y (production run, `model_id=2`), SFCN
+      mae_raw≈4.675y (batchnorm-ablation run) — a 0.02y gap, not a real
+      accuracy difference. Maintainer flagged region-level interpretability
+      as a deciding factor. Stacked gets it for free: `regional_stacker`
+      exposes per-region CV-R² (`region_cv_scores_`), already surfaced in
+      `notebooks/stacked_ensemble_review.ipynb`. SFCN is a black-box 3D
+      CNN — region attribution would need saliency/occlusion/Grad-CAM, none
+      implemented, nontrivial to validate, and computationally expensive.
+      With accuracy tied, no case to build that tooling. **Stacked stays
+      the production model.** SFCN not wired into `promote.py`'s `RUNNERS`
+      — remains a documented comparison baseline; revisit only if a future
+      SFCN change (soft classification head, TIV/sex fusion, LR schedule)
+      produces a real accuracy edge over stacked.*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
       *Status (2026-08-19): kickoff started. `events` table added
@@ -303,6 +319,207 @@ same PR.**
       delivery, consent/deletion logic, and a real-data verification pass
       (run against an actual scan through the built container) before
       calling any of this done.*
+
+      *Update (2026-08-21): two design docs added
+      (`docs/design_inference_pipeline.md`: stage/manifest/worker
+      architecture; `docs/cat12_container_spec.md`: container version pins,
+      batch template, reproducibility test) and both acted on same day.
+      **Real bug found and fixed**: the container spec's atlas was wrong
+      from the start — it assumed a placeholder `custom_atlas_v2`/
+      `neuromorphometrics`, but checking a real SNBB `cat_*.xml` plus the
+      production feature export (`outputs/datasets/regional.parquet`)
+      showed the promoted stacked model actually trains on
+      **Schaefer2018N400n7Tian2020S2** ROI volumes only —
+      `neuromorphometrics` was computed for SNBB but never ingested.
+      Fixed throughout `cat12_container_spec.md`; real atlas files copied
+      into `container/atlas/` (`.nii` git-ignored, `.csv` label map
+      committed). CAT12 pins confirmed from the same real XML:
+      `version_cat=12.9`, `revision_cat=2577`, `version_spm=7771`,
+      `version_matlab=24.1` (matches the `CAT12.9_2577.new` derivatives
+      folder name as a sanity check). **Second bug found and fixed**, in
+      `container/cat12.def` itself (which already existed, Apptainer-
+      native, contra the container spec doc's stale Docker-then-convert
+      plan — doc now reconciled to describe the real `.def` file): its
+      `%runscript` misused `-a1`/`-a2` for the input path/output dir,
+      but those flags are for extra numbered `<UNDEFINED>` batch
+      placeholders (e.g. resample smoothing kernel), not a data-path/
+      output-dir mechanism — confirmed via `jhuguetn/cat12-docker`'s real
+      invocation syntax (positional `-b batch.m input.nii`, output always
+      lands next to input, no output-dir arg exists). Fixed. `%post` also
+      gained the previously-missing atlas-install and batch-patch steps
+      (patches CAT12's own bundled `cat_standalone_segment.m` via `sed` on
+      only the fields confirmed to differ from stock, rather than
+      reconstructing the whole batch from scratch — safer given CAT12's
+      many undocumented defaults). MCR pin corrected too: `.def`'s
+      `%help` already said `R2017b`/`v93`; container spec doc had wrongly
+      guessed `R2023b`, now fixed to match. **Also**: `src/bagpipe/app/`
+      refactored from a flat `pipeline.py` into a `pipeline/` package
+      matching `design_inference_pipeline.md`'s stage-graph design —
+      `base.py` (Stage protocol, `ErrorCode`, `PipelineError`),
+      `models.py` (pydantic `Manifest`/`StageRecord`), `runner.py`
+      (executes stages, atomic `manifest.json` writes, stops at first
+      failure), and one file per stage (`ingest`, `anonymize`, `segment`,
+      `qc_gate`, `extract_features`, `predict`, `report`). `qc_gate` found
+      a real gap while writing it: CAT12's raw `<IQR>` XML tag is a 1–6
+      "mark" scale, not the 0–100 percent grade the design doc's threshold
+      (`≥70`) assumes — parses the percent+letter grade from the report's
+      human-readable text line instead of reimplementing CAT12's
+      mark-to-percent formula. `bagpipe.app.pipeline.run()`/`PipelineError`/
+      `BAGResult` kept as the package's public API so `bagpipe.app.api`
+      needed no changes. Full test suite (30, `tests/test_pipeline.py`
+      rewritten against the new `predict.py` stage) + ruff pass. **Still
+      not done**: `container/atlas/PROVENANCE.md`, staging the login-walled
+      standalone/MCR zips, the actual `apptainer build` + §6 reproducibility
+      test, job queue, report template, email delivery — same real-data
+      verification gap as the 2026-08-19 update, now one layer closer.*
+
+      *Update (2026-08-21, same day): real CAT12 standalone + MCR zips
+      staged and `apptainer build container/cat12.sif container/cat12.def`
+      actually run. **Six more real bugs found and fixed, none catchable
+      without the real files**: (1) `%help` text literally contained the
+      strings `%post`/`%files` mid-sentence — Apptainer's def parser
+      treats any line starting with `%` (after whitespace-trim) as a new
+      section header, context-blind, so a wrapped line beginning `%post
+      uses it as-is)...` broke parsing of the whole file; reworded to
+      never start a line with `%word`. (2) `%files` source paths are
+      resolved relative to the invoking shell's CWD, not the `.def`
+      file's own directory — fixed to `container/`-prefixed paths. (3)
+      the MCR installer (a raw MathWorks installer package, confirmed by
+      inspecting the zip — not an already-built runtime as briefly
+      guessed) installs into `<destinationFolder>/R2023b/`, not a
+      `v###/`-named dir as its own generic example docs implied — the
+      `find` regex only matched `v[0-9]+`; broadened to match `R20YY[ab]`
+      too, confirmed against the real installed tree. (4) same MCR
+      confirmation: **R2023b/v232**, matching the earlier correction.
+      Real, working image: `container/cat12.sif` (~9.8GB). Verified
+      inside the built image: `paths.env` resolves to the real
+      `cat_standalone.sh`/MCR paths, and all 9 batch-patch fields
+      (`affreg`, `biasstr`, `APP`, `vox`, `surface`, `BIDSno`,
+      `neuromorphometrics`, `cobra`, `ownatlas`, `GM.mod`, `WM.mod`)
+      landed correctly in the patched `batch_template.m` — confirmed by
+      `grep` inside the running container. **Real end-to-end smoke test
+      launched** against an actual SNBB T1w scan (`apptainer run
+      container/cat12.sif`, monitored for completion/error markers) —
+      see next update for the result once it lands.
+
+      Also same day: `%runscript` changed to forward `"$@"` instead of
+      `"$1"` (needs a rebuild to take effect on `.sif` — the smoke test
+      above ran against the pre-change image, unaffected since it only
+      ever passed one arg) so the same image serves both the inference
+      pipeline (`bagpipe.app.pipeline.segment`, one file, no extra args)
+      and a new bulk-reprocessing driver without the two ever drifying
+      apart on segmentation params — the actual training-inference parity
+      invariant. New: `src/bagpipe/preprocess/cat12_cohort.py` (`bag
+      preprocess cat12-cohort --config config/cat12_cohort.yaml`),
+      replacing the maintainer's old single-subject, desktop-MATLAB,
+      `nproc=5` script (`~/Projects/learning_for_luna/src/
+      cat12_runner_new.m`) with a config-driven, chunked, concurrent
+      driver over the same container. Real gotcha caught before it could
+      silently drop config: `cat_standalone.sh`'s `-a` flag **overwrites**
+      a scalar, it does not accumulate across multiple `-a` invocations
+      (confirmed by reading its real `parse_args()`) — all extra batch
+      lines (surface/thickness on, extra atlases, BIDS-folder redirect,
+      lazy skip-existing) are joined into one newline-separated string and
+      passed as a single `-a`. Config (`config/cat12_cohort.yaml`)
+      documents the real tradeoff explicitly: surface+cortical-thickness
+      extraction (not currently in bagpipe's feature space at all) is a
+      literature-backed addition worth the one-time cost of bulk
+      reprocessing, roughly doubling per-subject runtime — a decision
+      left visible and reversible in config, not silently baked in.
+      3 new tests (`tests/test_cat12_cohort.py`, pure logic — raw-T1w
+      filtering against every real CAT12 output-prefix convention,
+      BIDSfolder relative-path math, chunking); full suite (33) + ruff
+      pass (repo-wide, excluding pre-existing unrelated debt in
+      `sfcn.py`).
+
+      *Update (2026-08-21, later same day): smoke test result is in —
+      **real success, after three more real bugs found and fixed**, none
+      catchable without an actual run against real data. (1)
+      `--writable-tmpfs` is required — MCR can't extract its CTF archive
+      into the read-only image tree otherwise; failed identically every
+      time without it, worked every time with it. Added to both
+      `segment.py`'s and `cat12_cohort.py`'s `apptainer run` invocations.
+      (2) Classic-mode (`BIDS.BIDSno=0`) output goes into `mri/`/
+      `report/`/`label/` subdirs, **not flat** as an earlier "fix" this
+      same day assumed — that assumption compared against the real SNBB
+      training tree, which turns out to have been produced via a
+      *different* code path (`BIDS.BIDSyes` redirect, which does
+      flatten). Reverted `segment.py`/`features.py` back to
+      subdir-relative paths. (3) The atlas `.csv` (region names) was
+      staged via `%files` but never actually copied next to the `.nii` in
+      `%post` — fixed, warning gone on rebuild. **Also corrected a wrong
+      claim from earlier the same day**: the standalone zip's real CAT
+      version, read from an actual run's output XML (not a stale
+      docstring in a `.m` file), is **`26.0.rc3` r`2874`** — genuinely a
+      different, newer release line than SNBB training's CAT12.9/2577,
+      not "still 2577" as first misread. Confirms SNBB re-extraction
+      through this container is necessary, not optional, before it can
+      serve as the production inference container — matches what the
+      maintainer already planned. Real single-subject run: 12m26s, SIQR
+      87.22% (B+), clean output at `report/cat_T1w.xml` +
+      `label/catROI_T1w.xml`. New `limit` config key added to
+      `cat12_cohort.yaml`/`cat12_cohort.py` for validating the
+      still-unverified BIDS-redirect (cohort) output-path assumption on
+      1-2 subjects before committing to a full run.*
+
+      *Update (2026-08-22): that validation run happened — and the
+      BIDS-redirect assumption was indeed wrong, exactly as flagged.
+      **Two more real bugs found and fixed, only visible against real
+      data**: (1) CAT26's batch schema has no `BIDS.BIDSyes.BIDSfolder`
+      field at all (`Item BIDS: No field(s) named BIDSyes`) — replaced
+      entirely with input-staging (symlink each file into its desired
+      output location, run classic mode) reusing the exact mechanism
+      `segment.py` already uses for inference, no redirect field needed.
+      (2) CAT12 forks an untrackable background subprocess per file
+      whenever a job's file list has more than one file, regardless of
+      `nproc` — confirmed by direct A/B testing (every single-file job
+      succeeded, every multi-file job failed identically with `"...
+      catlog....txt" not exist after 60 seconds`). Fixed: `subjects_per_job`
+      forced to `1` — real parallelism comes from `concurrency` (separate
+      `apptainer run` invocations), no throughput loss. Also found:
+      surface/thickness reconstruction fails inside the container
+      (binary-permission-flavored error, not yet root-caused) — non-fatal
+      (core ROI output still succeeds), disabled by default since bagpipe
+      doesn't consume surface data anyway. **Validated end-to-end**: 2/2
+      real subjects succeeded via the actual `bag preprocess cat12-cohort`
+      CLI. Not yet done: §6 reproducibility suite, first real full-cohort
+      run (deliberately not launched — user runs in their own tmux
+      session), `container/atlas/PROVENANCE.md`, root-causing the surface
+      binary issue.*
+
+      *Update (2026-08-23): surface/thickness binary issue root-caused and
+      fixed — the "File permissions are not correct / binaries not
+      compatible / antivirus blocking" error was a red herring. Real
+      cause, found via `strace -f -e trace=execve` on a real run: Apptainer
+      leaks the host's `$SHELL` into the container by default, and
+      MATLAB's compiled runtime uses `$SHELL` to spawn every external
+      `system()` call — including every `CAT_*` surface/thickness binary.
+      The host runs zsh, which doesn't exist in the Ubuntu 22.04 container,
+      so every such call failed with `execve(...zsh...) = -1 ENOENT`,
+      which CAT12 reports as its generic misleading three-option message —
+      not an actual permission or compatibility problem, and nothing to do
+      with the earlier MCR_CACHE_ROOT/CTF-extraction-location theory (also
+      corrected along the way: the CTF actually self-extracts into an
+      `spm25_mcr/` dir next to the standalone binary, not under
+      `$MCR_CACHE_ROOT`). Fixed two ways in `container/cat12.def`: (1)
+      `%post` now pre-extracts the CTF once at build time and `chmod`s the
+      `CAT_*` binaries inside it, baking a correctly-permissioned
+      extraction into the image so no runtime extraction happens at all;
+      (2) every `apptainer run` invocation
+      (`bagpipe.app.pipeline.segment`, `bagpipe.preprocess.cat12_cohort`)
+      now passes `--env SHELL=/bin/bash`. Removed the now-obsolete
+      `mcr_cache_dir` config key and its host bind (dead weight now that
+      extraction is baked in). **Verified end-to-end**: rebuilt
+      `container/cat12.sif`, ran a real SNBB subject through it with
+      `output.surface`/`surf_measures`/`ct.native` all `= 1` — full
+      `surf/lh.*.gii`/`surf/rh.*.gii` + thickness maps produced, no
+      errors, SIQR 88.25% (B+), ~53min total (well under
+      `timeout_minutes: 90`). `config/cat12_cohort.yaml`'s
+      `extra_batch_lines` surface block is now enabled by default. Not yet
+      done: re-running the §6 reproducibility suite / real full-cohort run
+      against the rebuilt image (segmentation-only params unchanged, but
+      the image itself was rebuilt so this is still owed before trusting
+      it as the production inference container), `container/atlas/PROVENANCE.md`.*
 
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.
