@@ -1,0 +1,43 @@
+# bag models train-stacked --config config/models/stacked_v26_surface.yaml
+# CAT26 reprocessing cohort, volume + full surface panel fused per region:
+# cortical thickness, gyrification index, sulcal depth, fractal dimension,
+# and per-vertex area — everything CAT12's surfextract module produces
+# (container/cat12.def job 2, wired 2026-08-24; see
+# docs/cat12_container_spec.md §4d). build_region_matrix drops any session
+# missing a metric column, so this trains on the surface subset only —
+# compare its n_regions/n_samples in the printed run info against
+# stacked_v26.yaml's before trusting a leaderboard comparison between them.
+#
+# `features.atlases` restricts to the Schaefer2018N400n7 parcellation on
+# BOTH the volume side (Schaefer2018N400n7Tian2020S2, the production
+# model's own atlas) and the surface side (surf_Schaefer2018N400n7,
+# bagpipe.app.surface_atlas's custom resampling) — deliberately excludes
+# surf_DK40/surf_Destrieux even though every surface metric also exists
+# there. Real bug found 2026-08-24 without this: filtering by metric alone
+# pulls thickness/gyrification/etc from all three surface atlases at once,
+# which both explodes per-region base-learner count (3x atlases) and
+# shrinks n via dropna (a session needs every atlas' columns non-null) —
+# this is exactly what caused the 2026-08-24 CAT26-cohort-modeling r²
+# collapse (0.76->0.59) noted in CLAUDE.md when only `thickness` was fused
+# the same unfiltered way. One consistent parcellation avoids it.
+# base_estimator=ridgecv_interactions verified 2026-08-26 against real DB
+# (832 regions incl. both atlases): mae_raw=4.79y, runs fast — see
+# stacked_v26.yaml for the hgbr-vs-interactions runtime tradeoff note.
+datasets_dir: outputs/datasets_v26
+features:
+  metrics: [vol_gm, vol_wm, vol_csf, thickness, gyrification, sulcal_depth, fractal_dimension, area]
+  atlases: [Schaefer2018N400n7Tian2020S2, surf_Schaefer2018N400n7]
+stacker:
+  base_estimator:
+    type: ridgecv_interactions # see stacked_v26.yaml note: hgbr too slow at full-cohort scale
+  meta_estimator:
+    type: ridgecv
+  outer_cv: 5
+  inner_cv: 3
+  n_jobs: -1
+  random_state: 0
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-cat12v26
+  run_name: stacked-ridgecvinteractions-ridgecv-cole-v26-surface

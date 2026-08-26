@@ -11,7 +11,10 @@ from pathlib import Path
 import mlflow
 import yaml
 from regional_stacker import RegionalStackingRegressor, default_alpha_grid
+from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import PolynomialFeatures
 
 from bagpipe.core.config import get_path
 from bagpipe.models.bias_correction import get_corrector
@@ -19,9 +22,17 @@ from bagpipe.models.covariate_adjustment import TIVSexAdjustedRegressor
 from bagpipe.models.evaluate import EvalResult, evaluate
 from bagpipe.models.tabular import build_region_mapping, build_region_matrix
 
+# ponytail: interaction terms are only sane per-region (few metrics/region);
+# doing this for the meta-learner (hundreds of region predictions) would blow up
+# combinatorially, so "ridge_interactions" is base-estimator-only by convention.
 ESTIMATOR_TYPES = {
     "ridge": lambda params: Ridge(**params),
     "ridgecv": lambda params: RidgeCV(alphas=params.pop("alphas", default_alpha_grid()), **params),
+    "hgbr": lambda params: HistGradientBoostingRegressor(**{"random_state": 0, **params}),
+    "ridgecv_interactions": lambda params: make_pipeline(
+        PolynomialFeatures(interaction_only=True, include_bias=False),
+        RidgeCV(alphas=params.pop("alphas", default_alpha_grid()), **params),
+    ),
 }
 
 
@@ -36,8 +47,12 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     stacker_cfg = config["stacker"]
 
     metrics = config.get("features", {}).get("metrics")  # None = all metrics per region
+    atlases = config.get("features", {}).get("atlases")  # None = every atlas (see tabular.py)
+    datasets_dir = (
+        Path(config["datasets_dir"]) if config.get("datasets_dir") else get_path("datasets_dir")
+    )
     X, y, groups, region_columns, session_ids = build_region_matrix(
-        get_path("datasets_dir"), metrics=metrics
+        datasets_dir, metrics=metrics, atlases=atlases
     )
     region_mapping = build_region_mapping(region_columns)
 
@@ -72,6 +87,7 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
                 "bias_correction": config.get("bias_correction", "none"),
                 "n_splits": n_splits,
                 "metrics": ",".join(metrics) if metrics else "all",
+                "atlases": ",".join(atlases) if atlases else "all",
                 "n_regions": len(region_mapping),
                 "n_samples": len(y),
                 "outer_cv": stacker_cfg.get("outer_cv", 5),

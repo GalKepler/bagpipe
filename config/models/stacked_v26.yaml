@@ -1,0 +1,30 @@
+# bag models train-stacked --config config/models/stacked_v26.yaml
+# CAT26 reprocessing cohort only (source=cat12_v26). Volume metrics only
+# (all 426 sessions have these) — see stacked_v26_surface.yaml for the
+# thickness-inclusive variant (248/426 sessions have surface output).
+#
+# base_estimator was hgbr per scripts/feature_ablation.py (2026-08-26, mae_raw
+# 4.73 vs ridgecv 6.00 at n=281) but HGBR training time is prohibitive at full
+# cohort scale (per-region boosting fit x ~hundreds of regions). Switched to
+# ridgecv_interactions (per-region PolynomialFeatures(interaction_only=True) +
+# RidgeCV) — closed-form, fast, captures cross-metric interactions within a
+# region (vol_gm x vol_wm etc.) that plain ridgecv missed. Verified 2026-08-26
+# against real DB (n=281, 432 regions): mae_raw=5.02y vs hgbr's 4.73y — worse
+# but a fraction of the runtime; acceptable tradeoff at full-cohort scale.
+datasets_dir: outputs/datasets_v26
+features:
+  metrics: [vol_gm, vol_wm, vol_csf]
+stacker:
+  base_estimator:
+    type: ridgecv_interactions
+  meta_estimator:
+    type: ridgecv
+  outer_cv: 5
+  inner_cv: 3
+  n_jobs: -1
+  random_state: 0
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-cat12v26
+  run_name: stacked-ridgecvinteractions-ridgecv-cole-v26
