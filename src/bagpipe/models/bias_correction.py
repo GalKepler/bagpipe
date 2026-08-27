@@ -77,6 +77,31 @@ class BeheshtiCorrection:
         return y_true + (bag - trend)
 
 
+def fit_region_correctors(model, X: np.ndarray, y: np.ndarray) -> dict[str, ColeCorrection]:
+    """Fits one `ColeCorrection` per region on a `TIVSexAdjustedRegressor`-wrapped
+    `RegionalStackingRegressor`'s own per-region age predictions, and stores the
+    result as `model.model_.region_correctors_`.
+
+    Called at promotion time (see `bagpipe.models.promote`), on the same
+    full-data `X`/`y` the final artifact is refit on — in-sample, same caveat
+    as `region_estimators_` itself: real out-of-sample for any session added
+    to the cohort since promotion, in-sample for sessions the model trained
+    on. Raw (`region_estimators_`) is untouched and still feeds the
+    meta-learner; these correctors are for region-level analysis only.
+    """
+    region_x, tiv, sex = X[:, :-2], X[:, -2], X[:, -1]
+    residuals = model.adjuster_.transform(region_x, tiv, sex)
+    stacker = model.model_
+    correctors = {
+        rname: ColeCorrection().fit(
+            y, stacker.region_estimators_[rname].predict(residuals[:, stacker.region_columns_[rname]])
+        )
+        for rname in stacker.region_names_
+    }
+    stacker.region_correctors_ = correctors
+    return correctors
+
+
 CORRECTORS = {
     "none": NoCorrection,
     "cole": ColeCorrection,

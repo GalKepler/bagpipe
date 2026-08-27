@@ -13,6 +13,7 @@ import cloudpickle
 from bagpipe.core.config import get_path
 from bagpipe.db.base import get_session, init_db
 from bagpipe.db.models import ModelRegistry, Prediction
+from bagpipe.models.bias_correction import fit_region_correctors
 from bagpipe.models.tabular import build_region_matrix
 
 RUNNERS = {
@@ -55,12 +56,17 @@ def promote(model_name: str, config_path: Path, version: str, stage: str = "prod
     runner = importlib.import_module(RUNNERS[model_name])
     result, info = runner.run(config_path)
 
-    feature_cfg = info["config"].get("features", {})
+    config = info["config"]
+    feature_cfg = config.get("features", {})
+    datasets_dir = (
+        Path(config["datasets_dir"]) if config.get("datasets_dir") else get_path("datasets_dir")
+    )
     X, y, _groups, _region_columns, _session_ids = build_region_matrix(
-        get_path("datasets_dir"), metrics=feature_cfg.get("metrics")
+        datasets_dir, metrics=feature_cfg.get("metrics"), atlases=feature_cfg.get("atlases")
     )
     final_model = info["model_fn"]()
     final_model.fit(X, y)
+    fit_region_correctors(final_model, X, y)  # per-region Cole correction, stored on the artifact
 
     models_dir = get_path("models_dir")
     models_dir.mkdir(parents=True, exist_ok=True)
