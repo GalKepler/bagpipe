@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import mlflow
+import numpy as np
 import yaml
 from regional_stacker import RegionalStackingRegressor, default_alpha_grid
 from sklearn.ensemble import HistGradientBoostingRegressor
@@ -40,6 +41,23 @@ def _build_estimator(spec: dict) -> object:
     spec = dict(spec)
     estimator_type = spec.pop("type")
     return ESTIMATOR_TYPES[estimator_type](spec.pop("params", {}))
+
+
+def region_importance(fitted_model: TIVSexAdjustedRegressor) -> dict[str, float]:
+    """Meta-learner coefficient magnitude per region, from a fitted stacked
+    model (`TIVSexAdjustedRegressor` wrapping `RegionalStackingRegressor`).
+
+    Complements `region_cv_scores_` (how well a region predicts age *on its
+    own*) with which regions the meta-learner actually weights when
+    combining them — a different, both-worth-having explainability view.
+    Sorted descending by |coefficient|.
+    """
+    stacker = fitted_model.model_
+    # meta_estimator_ is always a Pipeline (StandardScaler + estimator) —
+    # coef_ lives on its last step.
+    coefs = np.ravel(stacker.meta_estimator_[-1].coef_)
+    importance = dict(zip(stacker.region_names_, np.abs(coefs), strict=True))
+    return dict(sorted(importance.items(), key=lambda kv: kv[1], reverse=True))
 
 
 def run(config_path: Path) -> tuple[EvalResult, dict]:

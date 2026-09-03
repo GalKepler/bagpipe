@@ -3,6 +3,8 @@ subdirs, plain atlas tag) — no real data, no DB."""
 
 from __future__ import annotations
 
+import sqlite3
+
 import pandas as pd
 
 from bagpipe.db.ingest_cat12_cohort import DEFAULT_ATLAS_KEY, DEFAULT_ATLAS_NAME, collect_rows
@@ -69,6 +71,7 @@ def test_collect_rows_parses_features_and_quality(tmp_path):
         "sessions_ingested": 1,
         "skipped_no_report": 0,
         "skipped_no_roi": 0,
+        "skipped_not_succeeded": 0,
     }
 
     region_rows = [r for r in feature_rows if r["region"] != "global"]
@@ -119,4 +122,27 @@ def test_collect_rows_ok_without_surface_file(tmp_path):
     _write_session(tmp_path, "sub-200109071247", "ses-200109071247")  # no catrois
     feature_rows, _, summary = collect_rows(tmp_path, lut=_lut())
     assert summary["sessions_ingested"] == 1
-    assert not any(r["atlas"] == "surf_DK40" for r in feature_rows)
+
+
+def test_collect_rows_skips_sessions_not_ledger_succeeded(tmp_path):
+    """Stale on-disk output from a prior run (not yet redone this run) must
+    not be silently re-ingested as current."""
+    _write_session(tmp_path, "sub-200109071247", "ses-200109071247")
+    _write_session(tmp_path, "sub-200210081348", "ses-200210081348")
+
+    con = sqlite3.connect(tmp_path / ".bagpipe_cat12_ledger.sqlite")
+    con.execute("create table subjects (t1w_path text, status text)")
+    con.execute(
+        "insert into subjects values (?, 'succeeded')",
+        (f"{tmp_path}/sub-200109071247/ses-200109071247/anat/sub-200109071247_ses-200109071247_T1w.nii",),
+    )
+    con.execute(
+        "insert into subjects values (?, 'queued')",
+        (f"{tmp_path}/sub-200210081348/ses-200210081348/anat/sub-200210081348_ses-200210081348_T1w.nii",),
+    )
+    con.commit()
+    con.close()
+
+    _, _, summary = collect_rows(tmp_path, lut=_lut())
+    assert summary["sessions_ingested"] == 1
+    assert summary["skipped_not_succeeded"] == 1

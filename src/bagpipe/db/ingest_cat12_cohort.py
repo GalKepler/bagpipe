@@ -28,10 +28,23 @@ silently dropped forever.
 A cohort mid-run has partial subjects (some without `report/`/`label`
 output yet, some flagged unprocessed in the ledger) — skipped, not raised,
 with a summary count so a partial-cohort ingest is visible, not silent.
+
+Real bug, found 2026-08-25 (`surface_atlas_review.ipynb`'s session count
+didn't match the throughput notebook's ledger-based count): a from-scratch
+`bag preprocess cat12-cohort` run doesn't clear a subject's old output
+directory before reprocessing it — `report/`/`label/` XMLs from a *previous*
+run sit on disk, unflagged, until that subject's current-run job actually
+finishes. `collect_rows` used to scan for any `report/`+`label` XML on disk
+regardless of the ledger, so mid-run it silently re-ingested stale output
+from before the ledger was last reset as if it were fresh. Fixed: only a
+subject/session whose ledger row is `status="succeeded"` is ingested —
+matches this docstring's original (unenforced) claim.
 """
 
 from __future__ import annotations
 
+import re
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -39,12 +52,13 @@ import yaml
 
 from bagpipe.app.cat12_parse import (
     SURFACE_ATLASES,
+    SURFACE_METRIC_TAGS,
     parse_globals,
     parse_quality,
     parse_regional,
     parse_surface_regional,
 )
-from bagpipe.app.surface_atlas import custom_surface_regional
+from bagpipe.app.surface_atlas import SURFACE_METRICS, custom_surface_regional
 from bagpipe.core.config import get_path
 from bagpipe.db.base import get_engine, init_db
 from bagpipe.db.ingest_cat12 import _SES_RE, QUALITY_COLUMNS, _subject_ids
@@ -67,42 +81,72 @@ CUSTOM_SURFACE_ATLAS_NAME = "surf_Schaefer2018N400n7"
 def _custom_surface_rows(surf_dir: Path, base: dict) -> list[dict]:
     """Best-effort — a mid-processing or surface-failed subject just won't
     have these native files yet, same "optional" treatment as `catrois_xml`
-    above."""
+    above. Loops every metric in SURFACE_METRICS (thickness always present;
+    gyrification/sulcal_depth/fractal_dimension/area only once `surfextract`
+    output exists for this subject — see surface_atlas.py's docstring on
+    verification status)."""
     lh_thickness = sorted(surf_dir.glob("lh.thickness.*"))
     if not lh_thickness:
         return []
     name = lh_thickness[0].name.removeprefix("lh.thickness.")
-    rh_thickness = surf_dir / f"rh.thickness.{name}"
     lh_sphere_reg = surf_dir / f"lh.sphere.reg.{name}.gii"
     rh_sphere_reg = surf_dir / f"rh.sphere.reg.{name}.gii"
-    if not (rh_thickness.exists() and lh_sphere_reg.exists() and rh_sphere_reg.exists()):
+    if not (lh_sphere_reg.exists() and rh_sphere_reg.exists()):
         return []
 
-    df = custom_surface_regional(
-        lh_thickness[0],
-        rh_thickness,
-        lh_sphere_reg,
-        rh_sphere_reg,
-        get_path("surface_atlas_lh_annot"),
-        get_path("surface_atlas_rh_annot"),
-        get_path("surface_atlas_lh_ref_sphere"),
-        get_path("surface_atlas_rh_ref_sphere"),
-    )
-    return [
-        {
-            **base,
-            "atlas": CUSTOM_SURFACE_ATLAS_NAME,
-            "region": r["label"],
-            "metric": "thickness",
-            "value": float(r["thickness"]),
-        }
-        for _, r in df.iterrows()
-    ]
+    rows = []
+    for metric_name, file_prefix in SURFACE_METRICS.items():
+        lh_value = surf_dir / f"lh.{file_prefix}.{name}"
+        rh_value = surf_dir / f"rh.{file_prefix}.{name}"
+        if not (lh_value.exists() and rh_value.exists()):
+            continue
+        df = custom_surface_regional(
+            lh_value,
+            rh_value,
+            lh_sphere_reg,
+            rh_sphere_reg,
+            get_path("surface_atlas_lh_annot"),
+            get_path("surface_atlas_rh_annot"),
+            get_path("surface_atlas_lh_ref_sphere"),
+            get_path("surface_atlas_rh_ref_sphere"),
+            metric=metric_name,
+        )
+        rows.extend(
+            {
+                **base,
+                "atlas": CUSTOM_SURFACE_ATLAS_NAME,
+                "region": r["label"],
+                "metric": metric_name,
+                "value": float(r[metric_name]),
+            }
+            for _, r in df.iterrows()
+        )
+    return rows
 
 
 def cohort_dir_from_config(config_path: str | Path = "config/cat12_cohort.yaml") -> Path:
     config = yaml.safe_load(Path(config_path).read_text())
     return Path(config["output_derivatives_dir"])
+
+
+def succeeded_session_ids(cohort_dir: Path) -> set[str] | None:
+    """Session IDs the ledger currently marks `succeeded` — `None` (skip
+    filtering) if no ledger exists yet. `t1w_path` looks like
+    `.../sub-X/ses-<session_id>/anat/...`."""
+    ledger_path = cohort_dir / ".bagpipe_cat12_ledger.sqlite"
+    if not ledger_path.exists():
+        return None
+    con = sqlite3.connect(ledger_path)
+    try:
+        paths = con.execute("select t1w_path from subjects where status='succeeded'").fetchall()
+    finally:
+        con.close()
+    sessions = set()
+    for (path,) in paths:
+        m = re.search(r"ses-([^/]+)", path)
+        if m:
+            sessions.add(m.group(1))
+    return sessions
 
 
 def _feature_rows(
@@ -149,19 +193,20 @@ def _feature_rows(
 
     if catrois_xml is not None:
         for surf_key, surf_atlas_name in SURFACE_ATLASES.items():
-            surf = parse_surface_regional(catrois_xml, surf_key)
-            if surf is None:
-                continue
-            rows.extend(
-                {
-                    **base,
-                    "atlas": surf_atlas_name,
-                    "region": r["label"],
-                    "metric": "thickness",
-                    "value": float(r["thickness"]),
-                }
-                for _, r in surf.iterrows()
-            )
+            for metric_name in SURFACE_METRIC_TAGS:
+                surf = parse_surface_regional(catrois_xml, surf_key, metric=metric_name)
+                if surf is None:
+                    continue
+                rows.extend(
+                    {
+                        **base,
+                        "atlas": surf_atlas_name,
+                        "region": r["label"],
+                        "metric": metric_name,
+                        "value": float(r[metric_name]),
+                    }
+                    for _, r in surf.iterrows()
+                )
 
     if surf_dir is not None:
         rows.extend(_custom_surface_rows(surf_dir, base))
@@ -194,7 +239,9 @@ def collect_rows(
         "sessions_ingested": 0,
         "skipped_no_report": 0,
         "skipped_no_roi": 0,
+        "skipped_not_succeeded": 0,
     }
+    succeeded = succeeded_session_ids(cohort_dir)
 
     for sub_dir in sorted(cohort_dir.glob("sub-*")):
         uid, legacy_id = _subject_ids(sub_dir.name)
@@ -204,6 +251,9 @@ def collect_rows(
         for ses_dir in sorted(sub_dir.glob("ses-*")):
             m = _SES_RE.match(ses_dir.name)
             session_id = m.group(1) if m else None
+            if succeeded is not None and session_id not in succeeded:
+                summary["skipped_not_succeeded"] += 1
+                continue
             anat_dir = ses_dir / "anat"
             report_xmls = sorted(anat_dir.glob("report/cat_*.xml"))
             catroi_xmls = sorted(anat_dir.glob("label/catROI_*.xml"))
@@ -279,5 +329,6 @@ if __name__ == "__main__":
         f"CAT12 cohort ingest: {result['sessions_ingested']}/{result['sessions_found']} sessions, "
         f"{result['rows_ingested']} feature rows, {result['quality_rows_ingested']} QC rows, "
         f"skipped {result['skipped_no_report']} (no report yet), "
-        f"{result['skipped_no_roi']} (no ROI output)"
+        f"{result['skipped_no_roi']} (no ROI output), "
+        f"{result['skipped_not_succeeded']} (ledger not succeeded)"
     )

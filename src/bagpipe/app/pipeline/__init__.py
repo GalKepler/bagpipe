@@ -50,6 +50,7 @@ def run_manifest(
     model_name: str = "stacked",
     chronological_age: float | None = None,
     job_id: str | None = None,
+    retention_opt_in: bool = False,
 ) -> Manifest:
     """Runs the full stage graph for one job against a fresh workspace under
     `work_dir`. Returns the completed Manifest (check `.status`/`.error`).
@@ -75,7 +76,7 @@ def run_manifest(
             upload_size_bytes=upload_dest.stat().st_size,
             chronological_age=chronological_age,
             sex=sex,
-            retention_opt_in=cfg["app"]["retain_uploads"],
+            retention_opt_in=retention_opt_in,
         ),
         environment=Environment(
             bagpipe_version="0.1.0",

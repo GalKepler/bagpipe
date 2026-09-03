@@ -37,6 +37,7 @@ def _write_manifest(work_dir, status: str) -> None:
 
 def test_predict_enqueues_and_returns_job_id(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)  # uploads_dir
+    monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
     monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
 
@@ -44,7 +45,7 @@ def test_predict_enqueues_and_returns_job_id(tmp_path, monkeypatch):
     resp = client.post(
         "/predict",
         files={"file": ("scan.nii.gz", b"fake-nifti-bytes", "application/octet-stream")},
-        data={"sex": "F"},
+        data={"sex": "F", "age": "30"},
     )
 
     assert resp.status_code == 202
@@ -79,3 +80,106 @@ def test_job_status_failed_includes_error(tmp_path, monkeypatch):
 
     assert body["status"] == "failed"
     assert body["error"]["user_message"] == "Something went wrong."
+
+
+def test_job_results_page_renders_for_succeeded_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    work_dir = tmp_path / "job3" / "run"
+    predict_dir = work_dir / "predict"
+    predict_dir.mkdir(parents=True)
+    prediction = {
+        "predicted_age": 52.3,
+        "bag_corrected": 4.1,
+        "regional_zscores": {"Schaefer2018N400n7Tian2020S2__LH_Vis_1__vol_gm": 1.2},
+    }
+    (predict_dir / "prediction.json").write_text(json.dumps(prediction))
+    manifest = {
+        "job_id": "job3",
+        "created_at": datetime.now(UTC).isoformat(),
+        "status": "succeeded",
+        "stages": [{"name": "qc_gate", "status": "succeeded", "metrics": {"siqr_pct": 87.2}}],
+    }
+    (work_dir / "manifest.json").write_text(json.dumps(manifest))
+
+    client = TestClient(api.app)
+    resp = client.get("/jobs/job3/view")
+
+    assert resp.status_code == 200
+    assert "+4.1 years" in resp.text
+    assert "LH_Vis_1" in resp.text
+    assert "/static/brainmap.js" in resp.text
+
+
+def test_job_results_page_404s_for_unfinished_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    _write_manifest(tmp_path / "job4" / "run", "running")
+    client = TestClient(api.app)
+    assert client.get("/jobs/job4/view").status_code == 404
+
+
+def test_upload_page_renders(monkeypatch):
+    monkeypatch.setattr(api, "load_config", lambda: {"app": {"turnstile_site_key": "site-123"}})
+    client = TestClient(api.app)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "site-123" in resp.text
+
+
+def test_predict_rejects_when_turnstile_configured_and_missing_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    monkeypatch.setattr(
+        api,
+        "load_config",
+        lambda: {"app": {"turnstile_secret_key": "secret", "max_queue_depth": 5}},
+    )
+    calls = []
+    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    client = TestClient(api.app)
+    resp = client.post(
+        "/predict",
+        files={"file": ("scan.nii.gz", b"bytes", "application/octet-stream")},
+        data={"sex": "F", "age": "30"},
+    )
+
+    assert resp.status_code == 400
+    assert not calls
+
+
+def test_predict_accepts_when_turnstile_verifies(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    monkeypatch.setattr(
+        api,
+        "load_config",
+        lambda: {"app": {"turnstile_secret_key": "secret", "max_queue_depth": 5}},
+    )
+    monkeypatch.setattr(api.turnstile, "verify", lambda *a, **kw: True)
+    calls = []
+    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    client = TestClient(api.app)
+    resp = client.post(
+        "/predict",
+        files={"file": ("scan.nii.gz", b"bytes", "application/octet-stream")},
+        data={"sex": "F", "age": "30", "cf-turnstile-response": "solved-token"},
+    )
+
+    assert resp.status_code == 202
+    assert len(calls) == 1
+
+
+def test_predict_rejects_when_queue_full(tmp_path, monkeypatch):
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    monkeypatch.setattr(api, "load_config", lambda: {"app": {"max_queue_depth": 0}})
+    calls = []
+    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    client = TestClient(api.app)
+    resp = client.post(
+        "/predict",
+        files={"file": ("scan.nii.gz", b"bytes", "application/octet-stream")},
+        data={"sex": "F", "age": "30"},
+    )
+
+    assert resp.status_code == 503
+    assert not calls

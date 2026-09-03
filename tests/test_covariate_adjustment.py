@@ -39,3 +39,17 @@ def test_tiv_sex_adjusted_regressor_fits_and_predicts():
     assert np.isfinite(result.metrics["mae_raw"])
     # adjusted model should beat a naive TIV/sex-blind fit by a wide margin
     assert result.metrics["mae_raw"] < 15
+
+
+def test_tiv_sex_adjusted_regressor_imputes_nan_regions():
+    X, age, _, _ = _synthetic()
+    rng = np.random.default_rng(1)
+    X = X.copy()
+    nan_rows = rng.choice(len(age), size=20, replace=False)
+    X[nan_rows, 0] = np.nan  # a session missing this region's value
+
+    model = TIVSexAdjustedRegressor(lambda: LinearRegression())
+    model.fit(X, age)
+    preds = model.predict(X)
+    assert np.all(np.isfinite(preds))
+    assert model.region_medians_.shape == (1,)

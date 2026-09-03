@@ -26,6 +26,19 @@ GLOBAL_METRICS = ["TIV", "vol_csf", "vol_gm", "vol_wm", "vol_wmh"]
 # corpuscallosum) reported as NaN and dropped here rather than propagated.
 SURFACE_ATLASES = {"aparc_DK40": "surf_DK40", "aparc_a2009s": "surf_Destrieux"}
 
+# XML <data> child tag per surface metric, for parse_surface_regional's
+# `metric` param. "thickness" confirmed real (every catROIs_*.xml has it).
+# The rest are a best-effort guess mirroring CAT12's per-vertex file-naming
+# convention (bagpipe.app.surface_atlas.SURFACE_METRICS) for whenever
+# `surfextract` output (container/cat12.def, 2026-08-24) starts populating
+# them — NOT yet confirmed against a real XML with these tags present.
+SURFACE_METRIC_TAGS = {
+    "thickness": "thickness",
+    "gyrification": "gyrification",
+    "sulcal_depth": "depth",
+    "fractal_dimension": "fractaldimension",
+}
+
 # Catlog text differs by CAT version — confirmed against real XML from both,
 # 2026-08-23: CAT12.9/2577 (training cohort) says "Image Quality Rating
 # (IQR): 79.50% (C+)", CAT26.0.rc3 (reprocessing cohort) says "Structural
@@ -67,11 +80,16 @@ def parse_regional(catroi_xml: Path, atlas_key: str, lut: pd.DataFrame) -> pd.Da
     return df.drop(columns="index")
 
 
-def parse_surface_regional(catrois_xml: Path, atlas_key: str) -> pd.DataFrame | None:
-    """Returns a DataFrame with columns [label, thickness] for one surface
-    atlas tag (e.g. `aparc_DK40`), or None if that atlas/thickness data is
-    absent — a failed surface reconstruction shouldn't raise, since core ROI
-    volumes (the model's actual input) can still be valid."""
+def parse_surface_regional(
+    catrois_xml: Path, atlas_key: str, metric: str = "thickness"
+) -> pd.DataFrame | None:
+    """Returns a DataFrame with columns [label, <metric>] for one surface
+    atlas tag (e.g. `aparc_DK40`) and one metric (see SURFACE_METRIC_TAGS),
+    or None if that atlas/metric data is absent — a failed surface
+    reconstruction, or a metric `surfextract` hasn't computed, shouldn't
+    raise, since core ROI volumes (the model's actual input) can still be
+    valid."""
+    tag = SURFACE_METRIC_TAGS.get(metric, metric)
     root = ET.parse(catrois_xml).getroot()
     atlas = root.find(atlas_key)
     if atlas is None:
@@ -80,14 +98,14 @@ def parse_surface_regional(catrois_xml: Path, atlas_key: str) -> pd.DataFrame | 
     data_el = atlas.find("data")
     if names_el is None or data_el is None:
         return None
-    thickness_el = data_el.find("thickness")
-    if thickness_el is None or not thickness_el.text:
+    metric_el = data_el.find(tag)
+    if metric_el is None or not metric_el.text:
         return None
     labels = [n.text for n in names_el]
-    raw = thickness_el.text.strip("[]").split(";")
+    raw = metric_el.text.strip("[]").split(";")
     values = [float(v) if v != "NaN" else float("nan") for v in raw]
-    df = pd.DataFrame({"label": labels, "thickness": values})
-    return df.dropna(subset=["thickness"])
+    df = pd.DataFrame({"label": labels, metric: values})
+    return df.dropna(subset=[metric])
 
 
 def parse_globals(cat_xml: Path) -> dict[str, float]:

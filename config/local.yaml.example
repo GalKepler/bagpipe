@@ -15,8 +15,9 @@ paths:
   datasets_dir: /media/storage/bagpipe/outputs/datasets
   models_dir: /media/storage/bagpipe/outputs/models
   atlas_lut_file: /home/galkepler/Projects/qsiparc/data/derivatives/qsirecon/atlases/atlas-Schaefer2018N400n7Tian2020S2/atlas-Schaefer2018N400n7Tian2020S2_dseg.tsv
+  atlas_volume_file: /media/storage/bagpipe/container/atlas/schaefer2018n400n7tian2020s2.nii  # served to the results-page NiiVue viewer as the regional overlay
   cat12_apptainer_image: /media/storage/bagpipe/outputs/containers/cat12.sif  # built from container/cat12.def
-  uploads_dir: /media/storage/bagpipe/outputs/uploads  # deleted per-job by default, see app.retain_uploads
+  uploads_dir: /media/storage/bagpipe/outputs/uploads  # deleted per-job unless the uploader opts in via /predict's retain_uploads
   jobs_db: /media/storage/bagpipe/outputs/jobs.db  # Huey SQLite queue store
 
   # Custom surface atlas, computed post-hoc in Python from CAT12's own native
@@ -26,11 +27,20 @@ paths:
   surface_atlas_rh_annot: /media/storage/bagpipe/container/atlas/rh.schaefer2018_400p_7n.annot
   surface_atlas_lh_ref_sphere: /media/storage/bagpipe/container/atlas/lh.sphere.freesurfer.gii
   surface_atlas_rh_ref_sphere: /media/storage/bagpipe/container/atlas/rh.sphere.freesurfer.gii
+  yabplot_repo: null  # maintainer's own brain-plot package, not on PyPI — set to its local checkout to enable notebook brain-surface cells
+  yabplot_tian_s2_atlas: null  # custom_atlas_path dir of per-region .vtk meshes matching Tian2020S2's 32 region names exactly
 
 app:
-  smtp_host: null
+  smtp_host: null           # e.g. smtp.resend.com — see deploy/README.md § Email
   smtp_port: 587
+  smtp_user: null           # unset = plain unauthenticated relay; set = STARTTLS + login
+  smtp_password: null
   from_address: null
   atlas_name: Schaefer2018N400n7Tian2020S2
-  atlas_key: schaefer2018n400n7tian2020s2__toCAT12  # CAT12 XML element name = atlas file basename, lowercased
-  retain_uploads: false  # opt-in only; default deletes uploaded imaging data after processing
+  atlas_key: schaefer2018n400n7tian2020s2  # CAT12 XML element name = atlas file basename, lowercased (no __toCAT12 on CAT26)
+
+  # Public-abuse protection (deploy/README.md § Public-abuse protection) —
+  # each accepted /predict costs ~an hour of the single GPU this app runs on.
+  turnstile_site_key: null    # public, embedded in the upload page's HTML
+  turnstile_secret_key: null  # private, verified server-side against Cloudflare
+  max_queue_depth: 5          # reject new /predict with 503 once this many jobs are pending

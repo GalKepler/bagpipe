@@ -51,13 +51,42 @@ def _resolve_apptainer_image(config: dict) -> Path:
     )
 
 
-def _find_raw_t1w(bids_root: Path) -> list[Path]:
-    """Raw BIDS T1w files only — every CAT12 output prefixes the filename
-    (mwp1sub-..., cat_sub-..., catROI_sub-..., ...), so a bare "sub-*_T1w"
-    match (via the glob pattern itself) already excludes them, verified
-    against a real derivatives tree, 2026-08-21.
+def _select_best_t1w(files: list[Path], anat_dir: Path) -> Path | None:
+    """One T1w per session, matching the maintainer's prior
+    find_t1w_for_cat12.py selection: prefer rec-norm/non-defaced/run-01;
+    else the only file if unambiguous; else skip (ambiguous — multi-run or
+    defaced variants with no clear winner, needs a human to disambiguate).
     """
-    return sorted(bids_root.glob("sub-*/ses-*/anat/sub-*_T1w.nii*"))
+    preferred = [
+        f
+        for f in files
+        if "rec-norm" in f.name and "acq-defaced" not in f.name and "run-01" in f.name
+    ]
+    if preferred:
+        return preferred[0]
+    if len(files) == 1:
+        return files[0]
+    print(f"skip (ambiguous, {len(files)} T1w): {anat_dir}")
+    return None
+
+
+def _find_raw_t1w(bids_root: Path) -> list[Path]:
+    """Raw BIDS T1w files only, one per session — every CAT12 output
+    prefixes the filename (mwp1sub-..., cat_sub-..., catROI_sub-..., ...),
+    so a bare "sub-*_T1w" match (via the glob pattern itself) already
+    excludes them, verified against a real derivatives tree, 2026-08-21.
+    A session can have multiple raw T1w files (multi-run, defaced variant)
+    — queuing all of them double-processes the session and leaves
+    ingest_cat12_cohort.collect_rows picking an arbitrary one
+    (`report_xmls[0]`); `_select_best_t1w` disambiguates instead.
+    """
+    selected = []
+    for anat_dir in sorted({p.parent for p in bids_root.glob("sub-*/ses-*/anat/sub-*_T1w.nii*")}):
+        files = sorted(anat_dir.glob("sub-*_T1w.nii*"))
+        best = _select_best_t1w(files, anat_dir)
+        if best is not None:
+            selected.append(best)
+    return selected
 
 
 def _stem(t1w_path: Path) -> str:
@@ -96,6 +125,40 @@ def _expected_output_xml(t1w_path: Path, bids_root: Path, output_derivatives_dir
     """
     staged = _staged_input_path(t1w_path, bids_root, output_derivatives_dir)
     return staged.parent / "report" / f"cat_{_stem(t1w_path)}.xml"
+
+
+# The surfextract per-vertex metrics (job 2, container/cat12.def, 2026-08-24
+# — see docs/cat12_container_spec.md §4d) — the file-prefix half of
+# bagpipe.app.surface_atlas.SURFACE_METRICS, minus thickness (already
+# required transitively: surfextract needs a central surface, which only
+# exists once thickness estimation already succeeded).
+_REQUIRED_SURFACE_FILE_PREFIXES = ("gyrification", "depth", "fractaldimension", "area")
+
+
+def _has_full_surface_output(t1w_path: Path, bids_root: Path, output_derivatives_dir: Path) -> bool:
+    """A subject can pass `_expected_output_xml` (core segmentation/ROI
+    succeeded) while surfextract failed independently for that subject
+    (surface reconstruction is its own real failure mode, not just a
+    config toggle) — checked separately so a subject only counts as fully
+    done once every feature this cohort run is actually meant to produce
+    is present, not just the core cat_*.xml. lh-only check (like the
+    notebook's own scan) — surfextract always produces both hemispheres
+    together or neither."""
+    staged = _staged_input_path(t1w_path, bids_root, output_derivatives_dir)
+    surf_dir = staged.parent / "surf"
+    stem = _stem(t1w_path)
+    return surf_dir.is_dir() and all(
+        (surf_dir / f"lh.{prefix}.{stem}").exists() for prefix in _REQUIRED_SURFACE_FILE_PREFIXES
+    )
+
+
+def _is_complete(t1w_path: Path, bids_root: Path, output_derivatives_dir: Path) -> bool:
+    """The real "done" check this cohort driver uses to mark a subject
+    succeeded/reconciled — core CAT12 output plus the full surfextract
+    panel, not just the former (see `_has_full_surface_output`)."""
+    return _expected_output_xml(
+        t1w_path, bids_root, output_derivatives_dir
+    ).exists() and _has_full_surface_output(t1w_path, bids_root, output_derivatives_dir)
 
 
 def _chunks(items: list, size: int) -> list[list]:
@@ -142,7 +205,7 @@ def _ledger_reconcile_existing_outputs(
     reconciled = 0
     for (path_str,) in rows:
         t1w_path = Path(path_str)
-        if _expected_output_xml(t1w_path, bids_root, output_derivatives_dir).exists():
+        if _is_complete(t1w_path, bids_root, output_derivatives_dir):
             conn.execute(
                 "UPDATE subjects SET status='succeeded', updated_at=? WHERE t1w_path=?",
                 (datetime.now(UTC).isoformat(), path_str),
@@ -299,7 +362,7 @@ def run(config_path: str | Path) -> dict:
                 chunk = futures[future]
                 _returncode, output_tail = future.result()
                 for f in chunk:
-                    if _expected_output_xml(f, bids_root, output_derivatives_dir).exists():
+                    if _is_complete(f, bids_root, output_derivatives_dir):
                         _ledger_mark(conn, f, "succeeded", None)
                         succeeded_this_run += 1
                     else:

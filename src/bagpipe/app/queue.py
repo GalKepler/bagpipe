@@ -27,16 +27,27 @@ def process_job(
     work_dir: str,
     model_name: str = "stacked",
     notify_email: str | None = None,
+    retain_uploads: bool = False,
+    chronological_age: float | None = None,
 ) -> str:
     """Runs the full stage graph for one job, then emails the result if
     `notify_email` was given. Returns the job's status string; full detail is
     read back from the manifest (`GET /jobs/{job_id}`), not the task result,
-    so a worker restart never loses job state.
+    so a worker restart never loses job state. `retain_uploads` is the
+    uploader's own explicit opt-in (docs/design_inference_pipeline.md §
+    Privacy by default) — defaults to False, deleting imaging data after
+    the job finishes.
     """
     from bagpipe.app.pipeline import run_manifest
 
     manifest = run_manifest(
-        Path(input_path), sex=sex, work_dir=Path(work_dir), model_name=model_name, job_id=job_id
+        Path(input_path),
+        sex=sex,
+        work_dir=Path(work_dir),
+        model_name=model_name,
+        job_id=job_id,
+        retention_opt_in=retain_uploads,
+        chronological_age=chronological_age,
     )
 
     if notify_email:
@@ -67,8 +78,16 @@ def _notify(notify_email: str, work_dir: Path, manifest) -> None:
     from_addr = cfg["from_address"] or "noreply@bagpipe.local"
 
     if manifest.status == "succeeded":
-        msg = email_mod.build_success_email(notify_email, from_addr, work_dir / "report" / "report.pdf")
+        msg = email_mod.build_success_email(
+            notify_email, from_addr, work_dir / "report" / "report.pdf"
+        )
     else:
         msg = email_mod.build_failure_email(notify_email, from_addr, manifest.error.user_message)
 
-    email_mod.send(msg, cfg["smtp_host"], cfg["smtp_port"])
+    email_mod.send(
+        msg,
+        cfg["smtp_host"],
+        cfg["smtp_port"],
+        smtp_user=cfg.get("smtp_user"),
+        smtp_password=cfg.get("smtp_password"),
+    )

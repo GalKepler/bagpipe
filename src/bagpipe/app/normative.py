@@ -26,9 +26,7 @@ class RegionNorm:
     resid_std: float
 
 
-def fit_norms(
-    region_columns: list[str], datasets_dir: Path | None = None
-) -> dict[str, RegionNorm]:
+def fit_norms(region_columns: list[str], datasets_dir: Path | None = None) -> dict[str, RegionNorm]:
     """Fits `value ~ age + sex + TIV` per region column on the full
     population, returning each column's coefficients and residual std (the
     denominator for a z-score). Cheap enough (OLS via lstsq) to refit per
@@ -52,9 +50,7 @@ def fit_norms(
     table = wide.merge(covariates, on=["subject_key", "session_id"], how="inner")
     table = table.dropna(subset=["age", "sex", "TIV"])
 
-    design = np.column_stack(
-        [table["age"], table["sex"], table["TIV"], np.ones(len(table))]
-    )
+    design = np.column_stack([table["age"], table["sex"], table["TIV"], np.ones(len(table))])
     norms: dict[str, RegionNorm] = {}
     for col in region_columns:
         if col not in table.columns:

@@ -1,6 +1,7 @@
 """`bag` CLI entry point. Subcommands are added as each pillar lands."""
 
 import argparse
+from pathlib import Path
 
 
 def main() -> None:
@@ -34,10 +35,31 @@ def main() -> None:
     cat12_cohort_status.add_argument(
         "--config", default="config/cat12_cohort.yaml", help="Path to cat12-cohort config YAML"
     )
+    repro_test = preprocess_sub.add_parser(
+        "repro-test", help="CAT12 §6 reproducibility acceptance test (docs/cat12_container_spec.md)"
+    )
+    repro_test.add_argument(
+        "--config", default="config/repro_test.yaml", help="Path to repro-test config YAML"
+    )
+    sync_t1w = preprocess_sub.add_parser(
+        "sync-t1w",
+        help="Copy the best T1w per newly-arrived SNBB session into the local BIDS mirror",
+    )
+    sync_t1w.add_argument(
+        "--config", default="config/cat12_cohort.yaml", help="Path to cat12-cohort config YAML"
+    )
 
     export = sub.add_parser("export", help="Export analytical tables")
     export_sub = export.add_subparsers(dest="export_command")
-    export_sub.add_parser("training-table", help="Parquet tables for model training")
+    export_training_table = export_sub.add_parser(
+        "training-table", help="Parquet tables for model training"
+    )
+    export_training_table.add_argument(
+        "--source", default=None, help="Filter to one features.source (e.g. cat12_v26)"
+    )
+    export_training_table.add_argument(
+        "--out-dir", default=None, help="Output dir (default: config paths.datasets_dir)"
+    )
 
     models = sub.add_parser("models", help="Train/evaluate models")
     models_sub = models.add_subparsers(dest="models_command")
@@ -142,10 +164,34 @@ def main() -> None:
             print(f"    {(f['last_error'] or '')[-300:]}")
         return
 
-    if args.command == "export" and args.export_command == "training-table":
-        from bagpipe.db.export_training_table import export as export_training_table
+    if args.command == "preprocess" and args.preprocess_command == "sync-t1w":
+        from bagpipe.preprocess.sync_t1w import run as sync_t1w_run
 
-        for name, s in export_training_table().items():
+        summary = sync_t1w_run(args.config)
+        print(
+            f"T1w sync: {summary['sessions_scanned']} sessions scanned, "
+            f"{summary['copied']} copied, {summary['already_present']} already present, "
+            f"{summary['skipped_ambiguous']} skipped (ambiguous)"
+        )
+        return
+
+    if args.command == "preprocess" and args.preprocess_command == "repro-test":
+        from bagpipe.preprocess.repro_test import run as repro_test_run
+
+        summary = repro_test_run(args.config)
+        print(
+            f"repro-test: {summary['n_subjects']} subjects "
+            f"({summary['n_errors']} errored), "
+            f"overall Pearson r = {summary['overall_pearson_r']:.5f}"
+        )
+        print(f"report: {summary['report_path']}")
+        return
+
+    if args.command == "export" and args.export_command == "training-table":
+        from bagpipe.db.export_training_table import export as export_training_table_fn
+
+        out_dir = Path(args.out_dir) if args.out_dir else None
+        for name, s in export_training_table_fn(out_dir=out_dir, source=args.source).items():
             print(f"{name}: {s['rows']} rows -> {s['out_path']}")
         return
 

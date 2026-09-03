@@ -12,17 +12,30 @@ from contextlib import closing
 from pathlib import Path
 
 from bagpipe.preprocess.cat12_cohort import (
+    _REQUIRED_SURFACE_FILE_PREFIXES,
     _chunks,
     _ensure_staged,
     _expected_output_xml,
     _find_raw_t1w,
+    _has_full_surface_output,
+    _is_complete,
     _ledger_connect,
     _ledger_mark,
     _ledger_pending,
     _ledger_reconcile_existing_outputs,
     _ledger_seed,
     _staged_input_path,
+    _stem,
 )
+
+
+def _touch_full_surface_output(t1w: Path, bids_root: Path, out_dir: Path) -> None:
+    staged = _staged_input_path(t1w, bids_root, out_dir)
+    surf_dir = staged.parent / "surf"
+    surf_dir.mkdir(parents=True, exist_ok=True)
+    stem = _stem(t1w)
+    for prefix in _REQUIRED_SURFACE_FILE_PREFIXES:
+        (surf_dir / f"lh.{prefix}.{stem}").touch()
 
 
 def test_find_raw_t1w_excludes_all_cat12_output_prefixes(tmp_path: Path):
@@ -36,6 +49,35 @@ def test_find_raw_t1w_excludes_all_cat12_output_prefixes(tmp_path: Path):
     found = _find_raw_t1w(tmp_path)
 
     assert found == [raw]
+
+
+def test_find_raw_t1w_prefers_rec_norm_run01_over_other_variants(tmp_path: Path):
+    anat = tmp_path / "sub-S002" / "ses-20260101" / "anat"
+    anat.mkdir(parents=True)
+    preferred = anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii"
+    preferred.touch()
+    (anat / "sub-S002_ses-20260101_acq-defaced_run-01_T1w.nii").touch()
+    (anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii").touch()
+
+    assert _find_raw_t1w(tmp_path) == [preferred]
+
+
+def test_find_raw_t1w_skips_ambiguous_session(tmp_path: Path):
+    anat = tmp_path / "sub-S003" / "ses-20260101" / "anat"
+    anat.mkdir(parents=True)
+    (anat / "sub-S003_ses-20260101_acq-defaced_run-01_T1w.nii").touch()
+    (anat / "sub-S003_ses-20260101_run-02_T1w.nii").touch()
+
+    assert _find_raw_t1w(tmp_path) == []
+
+
+def test_find_raw_t1w_uses_single_file_when_unambiguous(tmp_path: Path):
+    anat = tmp_path / "sub-S004" / "ses-20260101" / "anat"
+    anat.mkdir(parents=True)
+    only = anat / "sub-S004_ses-20260101_T1w.nii"
+    only.touch()
+
+    assert _find_raw_t1w(tmp_path) == [only]
 
 
 def test_staged_input_path_mirrors_bids_structure(tmp_path: Path):
@@ -108,12 +150,38 @@ def test_ledger_reconciles_from_real_disk_output_even_if_history_lost(tmp_path: 
         expected_xml = _expected_output_xml(t1w, bids_root, out_dir)
         expected_xml.parent.mkdir(parents=True)
         expected_xml.touch()  # CAT12 actually finished this one before the crash
+        _touch_full_surface_output(t1w, bids_root, out_dir)
 
         reconciled = _ledger_reconcile_existing_outputs(conn, bids_root, out_dir)
         pending = _ledger_pending(conn, max_retries=2)
 
         assert reconciled == 1
         assert pending == []
+
+
+def test_ledger_does_not_reconcile_subject_missing_surface_output(tmp_path: Path):
+    """A subject can pass the core cat_*.xml check while surfextract failed
+    independently (a real, separate failure mode, not just a config toggle)
+    — such a subject must stay pending, not get marked succeeded missing
+    the surface panel the cohort run is meant to produce."""
+    bids_root, out_dir, t1w, conn = _setup_ledger_fixture(tmp_path)
+    with closing(conn):
+        _ledger_seed(conn, [t1w])
+
+        expected_xml = _expected_output_xml(t1w, bids_root, out_dir)
+        expected_xml.parent.mkdir(parents=True)
+        expected_xml.touch()
+        # no surface output touched — simulates a subject whose segmentation
+        # succeeded but surfextract failed/never ran
+
+        assert not _is_complete(t1w, bids_root, out_dir)
+        assert not _has_full_surface_output(t1w, bids_root, out_dir)
+
+        reconciled = _ledger_reconcile_existing_outputs(conn, bids_root, out_dir)
+        pending = _ledger_pending(conn, max_retries=2)
+
+        assert reconciled == 0
+        assert pending == [t1w]
 
 
 def test_failed_subject_retried_until_max_retries_then_left_alone(tmp_path: Path):

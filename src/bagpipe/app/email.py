@@ -1,10 +1,10 @@
 """Email delivery — DESIGN.md §6 ("... emailed"). Plain `smtplib`/`email`
 (stdlib) — no SMTP client dependency needed for send-and-attach-one-PDF.
 
-ponytail: no auth (user/password) in `app` config — `smtp_host`/`smtp_port`
-assume an open internal relay, matching what's actually configured today
-(`config/local.yaml`: all null, unset on this workstation). Add creds to
-`app` config + `smtplib.SMTP.login()` here if/when a real relay needs them.
+`smtp_user`/`smtp_password` in `app` config are optional: unset (the
+internal-relay case) sends plain, no STARTTLS/login; set (e.g. a
+transactional provider like Resend, see deploy/README.md) upgrades to
+STARTTLS + AUTH LOGIN before sending.
 """
 
 from __future__ import annotations
@@ -40,7 +40,13 @@ def build_failure_email(to_addr: str, from_addr: str, user_message: str) -> Emai
     return msg
 
 
-def send(msg: EmailMessage, smtp_host: str | None, smtp_port: int) -> bool:
+def send(
+    msg: EmailMessage,
+    smtp_host: str | None,
+    smtp_port: int,
+    smtp_user: str | None = None,
+    smtp_password: str | None = None,
+) -> bool:
     """Sends `msg`. Returns False (and logs) if `smtp_host` isn't configured,
     rather than raising — a missing/misconfigured mail relay must never fail
     the job whose result it's trying to deliver.
@@ -50,8 +56,11 @@ def send(msg: EmailMessage, smtp_host: str | None, smtp_port: int) -> bool:
         return False
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+            if smtp_user:
+                server.starttls()
+                server.login(smtp_user, smtp_password or "")
             server.send_message(msg)
         return True
-    except OSError:
+    except (OSError, smtplib.SMTPException):
         logger.exception("failed to send email to %s", msg["To"])
         return False

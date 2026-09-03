@@ -1,0 +1,15 @@
+# bag models train-baseline --config config/models/baseline_v26.yaml
+# CAT26 reprocessing cohort only (source=cat12_v26, ~426 sessions as of
+# 2026-08-24) — see `bag export training-table --source cat12_v26
+# --out-dir outputs/datasets_v26`.
+datasets_dir: outputs/datasets_v26
+model:
+  type: ridge
+  params: {}
+features:
+  metrics: [vol_gm]
+bias_correction: cole # none | cole | beheshti
+n_splits: 5
+mlflow:
+  experiment: bagpipe-cat12v26
+  run_name: baseline-ridge-cole-v26

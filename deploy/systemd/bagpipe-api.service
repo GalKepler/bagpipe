@@ -1,0 +1,28 @@
+# Template — copy to /etc/systemd/system/bagpipe-api.service and fill in
+# WorkingDirectory/ExecStart/User for this machine (paths below are examples,
+# not real — CLAUDE.md: machine-specific paths never get hardcoded in the repo).
+#
+# Serves FastAPI only; CAT12 runs in the separate bagpipe-worker.service so a
+# slow/stuck job never blocks new uploads from being accepted.
+#
+# Bind to 127.0.0.1 and put a TLS-terminating reverse proxy (nginx/caddy) in
+# front — this app has no auth and handles uploaded medical imaging, so it
+# must never be exposed directly to the internet. See deploy/README.md.
+
+[Unit]
+Description=bagpipe FastAPI upload/predict endpoint
+After=network.target
+
+[Service]
+Type=simple
+User=bagpipe
+WorkingDirectory=/opt/bagpipe
+Environment=PATH=/opt/bagpipe/.venv/bin
+ExecStart=/opt/bagpipe/.venv/bin/bag app serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

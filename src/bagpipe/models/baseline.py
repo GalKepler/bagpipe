@@ -46,8 +46,12 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     model_fn = lambda: TIVSexAdjustedRegressor(base_model_fn)  # noqa: E731
 
     metrics = config.get("features", {}).get("metrics", ["vol_gm"])
+    atlases = config.get("features", {}).get("atlases")  # None = every atlas
+    datasets_dir = (
+        Path(config["datasets_dir"]) if config.get("datasets_dir") else get_path("datasets_dir")
+    )
     X, y, groups, region_columns, _session_ids = build_region_matrix(
-        get_path("datasets_dir"), metrics=metrics
+        datasets_dir, metrics=metrics, atlases=atlases
     )
     bias_corrector = get_corrector(config.get("bias_correction", "none"))
     n_splits = config.get("n_splits", 5)

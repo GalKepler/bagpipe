@@ -26,6 +26,9 @@ dependencies = [
     "huey>=2.5",
     "weasyprint>=69.0",
     "pydeface>=2.1.0",
+    "trimesh>=5.0",
+    "dracox>=0.0.1",
+    "fast-simplification>=0.2",
 ]
 
 [project.scripts]

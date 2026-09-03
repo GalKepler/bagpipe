@@ -267,6 +267,129 @@ same PR.**
       — remains a documented comparison baseline; revisit only if a future
       SFCN change (soft classification head, TIV/sex fusion, LR schedule)
       produces a real accuracy edge over stacked.*
+
+      *Update (2026-08-24): CAT26 reprocessing cohort (`features.source=
+      "cat12_v26"`, added surface cortical thickness on top of the existing
+      volume ROIs, see Phase 4's 2026-08-23 update) wired into the modeling
+      pipeline as its own selectable dataset — `bag export training-table
+      --source cat12_v26 --out-dir outputs/datasets_v26` (new `--source`/
+      `--out-dir` flags; `None` keeps pooling every CAT version like
+      before), plus a `datasets_dir` override key model configs can set
+      (`baseline_v26.yaml`, `stacked_v26.yaml`, `stacked_v26_surface.yaml`)
+      so this doesn't touch the production `outputs/datasets` used by the
+      promoted model. As of today, 426/~4500 sessions are reprocessed (337
+      with full age/sex/TIV coverage for modeling, 248 with surface
+      output). **Real diagnostic run, not just a leaderboard number**: raw
+      leaderboard on the v26 cohort looks much worse than production
+      (ridge mae_raw≈7.15y, stacked≈6.94y vs. production's ≈4.7y) —
+      checked whether this is the new CAT version regressing quality or
+      just the much smaller n. Isolated it: re-ran the *old* CAT12.9 ridge
+      baseline restricted to the exact same 337 subjects (`source="cat12"`
+      pool, no rows added/removed) — mae_raw≈7.17y, statistically
+      indistinguishable from the new version's 7.15y on the same subjects.
+      **Confirmed: the CAT26 reprocessing isn't degrading model quality,
+      the small-n comparison to the full production leaderboard just isn't
+      apples-to-apples yet.** Stacked ensemble again beats flat ridge on
+      this cohort too (6.94y vs 7.15y), consistent with the earlier
+      finding. Tried fusing cortical thickness into the stacked ensemble
+      (`stacked_v26_surface.yaml`, `metrics: [vol_gm, vol_wm, vol_csf,
+      thickness]`) — mae_raw ticks down to 6.72y but r²_raw collapses
+      (0.76→0.59) because thickness is on 3 different surface atlases
+      (DK40/Destrieux/Schaefer) with no shared parcellation to volume, and
+      the metric filter matches all three, giving 1051 per-region base
+      learners against only 197 samples with full coverage — likely noise
+      from an underdetermined fit, not a real signal; **don't trust the
+      surface-fusion number until surface coverage is much larger than the
+      region count.** Not yet done: full-cohort reprocessing (still
+      running per Phase 4), re-promoting a v2 model once the reprocessed
+      cohort is large enough for a fair leaderboard comparison, restricting
+      thickness fusion to one atlas (Schaefer, to match the volume atlas)
+      once that comparison is worth trusting.*
+
+      *Update (2026-08-25): **CAT12.9_2577.new (`source="cat12"`) retired as
+      the training cohort per maintainer decision** — CAT12.cohort_2026_08
+      (`source="cat12_v26"`) is now the only cohort used going forward, even
+      mid-reprocessing, because it's on a newer/more reliable CAT version.
+      Promoted `stacked v2` (`model_id=3`) trained on it, replacing `v1`
+      (archived). **Two real bugs found and fixed getting there**: (1)
+      `bag ingest cat12-cohort` scanned on-disk `report/`/`label/` XMLs
+      unconditionally — a from-scratch `cat12-cohort` run doesn't clear a
+      subject's old output before reprocessing it, so mid-run it silently
+      re-ingested **stale pre-surfextract output from before the
+      2026-08-24 ledger reset** as if current; DB held 546 `cat12_v26`
+      sessions when the ledger's actual current-run count was 186 —
+      exactly the discrepancy the maintainer flagged. Fixed:
+      `collect_rows` now skips any session the ledger doesn't mark
+      `succeeded` (`ingest_cat12_cohort.py`, `_succeeded_session_ids`);
+      new test `test_collect_rows_skips_sessions_not_ledger_succeeded`.
+      Old stale rows already in `features` aren't purged by this fix (no
+      destructive DB op run) — they self-heal via upsert as reprocessing
+      reaches each subject, and this training run filtered them out at
+      export time instead (join against the ledger's succeeded set,
+      137/142 sessions with full age/sex/TIV coverage survived). (2)
+      `promote.py`'s final full-data refit hardcoded
+      `get_path("datasets_dir")` regardless of the training config's own
+      `datasets_dir`/`atlases` — would have silently fit the "production"
+      artifact on the wrong (old, pooled) cohort even though CV metrics
+      were computed correctly on `outputs/datasets_v26`. Fixed to reuse
+      `info["config"]`. **Real numbers, on the currently-reprocessed
+      subset (137 sessions, reprocessing still running)**: mae_raw≈4.86y,
+      mae_corrected≈6.56y, r²_raw≈0.54 — mae_raw is close to old v1's
+      4.70y despite far fewer samples (unlike the 2026-08-24 337-sample
+      run's 6.94y), sex gap from v1 does **not** reproduce here (p=0.51,
+      n=66/71) — plausibly an n=137 power issue rather than a real
+      difference, don't read into it yet. `notebooks/production_model_status.ipynb`
+      (added same day, no-retrain "current production model state" view
+      reading `models_registry`/`predictions` directly) needed a matching
+      fix: its sex join hit `demographics` directly, which only covers the
+      SNBB cohort — this v26 subset is all legacy-cohort subjects (sex in
+      `legacy_participant.gender`, keyed by `subject_key` not
+      `session_id`); now reads sex from the model's own
+      `datasets_dir/globals.parquet` instead (the same source
+      `export_training_table._cohorts()` used at training time). **Not yet
+      done**: cohort still reprocessing — re-promote v2 again once
+      coverage is much larger than 137/142, `outputs/datasets`
+      (old-cohort default) and `config/models/{baseline,stacked}.yaml`
+      still point at the retired cohort and should be repointed/removed
+      once v26 coverage matches or exceeds it.*
+
+      *Update (2026-08-25, later same day): found (pre-existing, untracked
+      at session start) `scripts/{nightly_cat12_cohort,
+      periodic_ingest_export,periodic_train_models}.sh` already live in
+      `crontab -l` — nightly reprocessing scan (02:00), ingest+export every
+      3h, eval-only retrain every 12h, deliberately **not** auto-promoting.
+      **Real root-cause fix applied before wiring daily promotion**:
+      `export_training_table.export(source="cat12_v26")` had the same
+      staleness gap as `ingest_cat12_cohort.py`'s fixed bug above — it
+      pooled every `cat12_v26` row in `features` with no ledger scoping, so
+      it would keep re-including old pre-reset sessions that
+      `ingest`'s fix stopped adding but never retroactively removed. Fixed
+      once, at the shared root (`export()`'s `LEDGER_SCOPED_SOURCES`
+      check, reusing `ingest_cat12_cohort.succeeded_session_ids` — renamed
+      from `_succeeded_session_ids`, now a cross-module helper): any
+      `source="cat12_v26"` export filters to the ledger's current
+      `succeeded` set. Per maintainer's explicit request, added
+      `scripts/periodic_promote.sh` — daily `bag models promote --name
+      stacked --config config/models/stacked_v26.yaml --version
+      "v26-$(date +%Y%m%d)"`, cron `0 5 * * *` (after the 02:00 reprocess
+      scan + at least one 3h ingest/export cycle), separate from the
+      12h eval-only trio so a slow/bad training run there can't block or
+      race promotion. Re-promoting daily on a still-growing, still-small
+      cohort means production `mae_raw` will be noisy day to day —
+      expected, not a bug; check `production_model_status.ipynb` rather
+      than trusting any single day's number.*
+
+      *Update (2026-08-27): regional BAG now bias-corrected too, and fit at
+      promotion time, not analysis time. `bagpipe.models.bias_correction.
+      fit_region_correctors` (called from `promote.py` right after the
+      final-refit `fit()`) fits one `ColeCorrection` per region on the
+      artifact's own per-region predictions and stores the result as
+      `stacker.region_correctors_`, alongside the existing (untouched)
+      `region_estimators_` that still feed the meta-learner raw. Consumers
+      (e.g. `notebooks/bag_correlates_explorer.ipynb`) call `.transform()`
+      on the stored corrector — no fitting happens outside promotion.
+      Same in-sample caveat as `region_estimators_` itself. New test:
+      `tests/test_bias_correction.py`.*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
       *Status (2026-08-19): kickoff started. `events` table added
@@ -521,6 +644,231 @@ same PR.**
       the image itself was rebuilt so this is still owed before trusting
       it as the production inference container), `container/atlas/PROVENANCE.md`.*
 
+      *Update (2026-08-23): job queue, report, email, and per-job consent
+      landed (commit `62afb1f`, not recorded here at the time — this entry
+      backfills that gap). Huey/SQLite job queue (`bagpipe.app.queue`,
+      `bag app worker`); `POST /predict` enqueues and returns immediately,
+      `GET /jobs/{id}` polls status/result (`bagpipe.app.api`, 4 tests in
+      `tests/test_api.py`, previously zero coverage). HTML/PDF report via
+      WeasyPrint (`bagpipe.app.report`) and email delivery
+      (`bagpipe.app.email`, plain `smtplib`). Fixed a real privacy gap:
+      `retain_uploads=False` was recorded per job but never enforced —
+      added `_delete_imaging()` to actually remove `anon/`+`cat12/` after
+      a job finishes. Also: `bag preprocess cat12-cohort` gained surface
+      (cortical thickness) ROI extraction — CAT12's own-atlas surface
+      batch field doesn't work on this CAT26 build (real single-subject
+      test, `docs/cat12_container_spec.md` §4b), replaced with
+      `bagpipe.app.surface_atlas` (nearest-vertex resampling from CAT12's
+      native thickness + `sphere.reg` onto any atlas grid, validated
+      against CAT12's own DK40 output, <0.01mm diff), wired into `bag
+      ingest cat12-cohort` so every surface-processed session gets
+      Schaefer-7N regional thickness automatically.*
+
+      *Update (2026-08-23, same day): deploy-readiness pass. Two real gaps
+      found and fixed: (1) `retain_uploads` (upload retention/consent) was
+      only a global config default (`app.retain_uploads`), not the
+      per-upload explicit opt-in the design doc and CLAUDE.md's hard
+      constraints actually call for — added `retain_uploads` as a
+      `/predict` form field, threaded through
+      `queue.process_job`/`pipeline.run_manifest`; the global config key
+      is gone. (2) `bagpipe.app.api`'s module docstring still said
+      retention/deletion wasn't wired, contradicting the code added the
+      same day — fixed. Added `deploy/` (systemd unit templates for
+      `bagpipe-api`/`bagpipe-worker`, `deploy/README.md`: install, reverse
+      proxy requirement — the app has no auth and must never sit directly
+      on a public interface — SMTP, retention semantics, and a
+      pre-production checklist). `docs/getting_started.md` §5 now points
+      there instead of a stale "not yet production-verified" note.
+      **Not yet done, and still the real blockers before this is actually
+      production-ready**: no request auth on `/predict`/`/jobs/{id}`; the
+      §6 reproducibility suite hasn't been re-run against the rebuilt
+      `cat12.sif` (owed since the 2026-08-23 surface-binary fix);
+      `container/atlas/PROVENANCE.md` still missing; SMTP has no
+      TLS/auth wiring (assumes a local relay). None of this was
+      exercised against a real upload/GPU/container run this session —
+      verified only via the existing synthetic test suite.*
+
+      *Update (2026-08-24): public-abuse protection + email auth, following
+      maintainer decisions (this app is meant for the general public, no
+      login; recommend-from-scratch on email). Three new layers, all
+      config-gated so a fresh `config/local.yaml.example` still works
+      unconfigured for local dev: (1) Cloudflare Turnstile
+      (`bagpipe.app.turnstile`, stdlib `urllib` POST to Cloudflare's
+      siteverify endpoint — fails closed on any error) gates `/predict`,
+      skipped with a logged warning if `app.turnstile_secret_key` is unset;
+      (2) `app.max_queue_depth` (default 5) rejects new jobs with `503` via
+      `huey.pending_count()` once that many are already queued — protects
+      the single GPU from an unbounded backlog; (3) an nginx
+      `limit_req`-based per-IP throttle documented in `deploy/README.md`.
+      Added `GET /` (`bagpipe.app.upload_page`, stdlib `string.Template`
+      matching `bagpipe.app.report`'s existing no-framework approach) — a
+      plain HTML upload form + poll loop, since a JSON-only API isn't
+      actually usable by "general public, no login" without one.
+      `bagpipe.app.email.send()` gained optional `smtp_user`/
+      `smtp_password` (STARTTLS + `AUTH LOGIN` when set) — the missing
+      piece flagged in deploy/README.md's checklist, needed for any real
+      transactional provider. `deploy/README.md` now recommends Resend
+      (free tier, SMTP-compatible, documented setup) instead of leaving
+      SMTP as a "figure it out" TODO. 8 new tests
+      (`tests/test_turnstile.py`, `tests/test_email.py` auth paths,
+      `tests/test_api.py` upload-page/turnstile/queue-depth cases); 23
+      app-layer tests + ruff pass. **Not exercised against a real
+      Cloudflare account, real Resend account, or real network traffic**
+      — verified only via mocked `urlopen`/`smtplib`. Still not done:
+      request auth on `GET /jobs/{id}` (deliberately deferred — treated as
+      a possession-of-the-UUID-link model, see deploy/README.md), the §6
+      CAT12 reproducibility re-run, `container/atlas/PROVENANCE.md`.*
+
+      *Update (2026-08-24): `container/atlas/PROVENANCE.md` written
+      (source/space/license for every atlas file, and which are actually
+      read at runtime vs. dead weight per §4b) and §6 reproducibility-suite
+      tooling built (`bagpipe.preprocess.repro_test`, `bag preprocess
+      repro-test --config config/repro_test.yaml`): stratified subject
+      selection (12 age-tertile×sex + 2 lowest-IQR stress cases, queried
+      straight from `session`/`demographics`/`cat12_quality`) feeds each
+      subject's raw T1w through the real `run_manifest` stage graph — the
+      same code `/predict` runs — then diffs its features/BAG against the
+      stored `features`/`predictions` rows for that subject, writing
+      `docs/repro_reports/{image_digest}.md` per §6's acceptance criteria.
+      Subject-selection query verified against the real DB (14/14 selected
+      correctly, real subject IDs/ages/IQRs). **Blocked before an actual
+      run**: `paths.bids_root` (`//132.66.46.62/Bids`, SMB) is unreachable
+      from this machine right now — `ls`/glob against it returned nothing
+      and a direct `ping 132.66.46.62` showed 100% packet loss ("Host is
+      down"). This is a network/server-availability issue, not a bagpipe
+      bug — run `bag preprocess repro-test` once that share is reachable
+      again.*
+
+      *Update (2026-08-24): additional surface parameters (gyrification,
+      sulcal depth, fractal dimension, area) added, per maintainer request
+      to capture more than cortical thickness. **Real bug found first**:
+      `output.surf_measures = 1` (`config/cat12_cohort.yaml`) never did
+      anything — no such field exists in `cat_standalone_segment.m`'s real
+      schema (checked the bundled `.m` directly), silently ignored; real
+      cohort output on disk confirmed it — no gyrification/depth/
+      fractaldimension files despite the line being set for the whole
+      2026-08-23 run. GI/SD/FD/area are a genuinely separate CAT12 module,
+      `stools.surfextract`, not exposed via any `estwrite` field and not
+      shipped as a standalone-package `.m` template. Wired into
+      `container/cat12.def`'s `%post` as **job 2**, chained to job 1's
+      central-surface output via direct deterministic-path construction
+      (not `cfg_dep` — `surfextract`'s real dependency registration is
+      compiled inside `spm25.ctf`, unreadable). Per maintainer's explicit
+      choice (asked directly, given the tradeoff), `output.surface` is no
+      longer patched to `0` for inference — surface reconstruction +
+      `surfextract` now run for **every** caller through the one shared
+      `batch_template.m`, not just cohort reprocessing, trading real
+      inference latency (~2-3x a volume-only run, already within the
+      existing 90-min pipeline timeout) for one template instead of a
+      second gated one. `bagpipe.app.surface_atlas` genericized from
+      thickness-only to any per-vertex metric (`SURFACE_METRICS`);
+      `bagpipe.app.cat12_parse.parse_surface_regional` gained a `metric`
+      param (`SURFACE_METRIC_TAGS`) for the DK40/Destrieux path via
+      `catROIs_*.xml`; `ingest_cat12_cohort.py` loops all metrics for both
+      the native-atlas and custom-Schaefer paths. Full test suite (80) +
+      ruff clean. **Not yet verified against real data**: no `cat12.sif`
+      built on this machine right now, so the `surfextract` field names
+      and the resulting `surf/{lh,rh}.{gyrification,depth,
+      fractaldimension,area}.*` filenames are a best-effort read of
+      CAT12's documented batch GUI, unconfirmed against this build's
+      actual (compiled, uninspectable) behavior. Before trusting any of
+      it: rebuild the image, run `bag preprocess cat12-cohort` with
+      `limit: 2`, confirm those files actually appear with plausible
+      values — see `docs/cat12_container_spec.md` §4d.*
+
+      *Update (2026-08-24, same day): surfextract wiring rebuilt and
+      verified against real container runs — two more real bugs found
+      and fixed, both only catchable against an actual build. (1) The
+      hand-written `surfextract` field spec broke the WHOLE batch load
+      ("No executable modules, but still unresolved dependencies or
+      incomplete module inputs"), not just a silent no-op — root-caused
+      by fetching CAT12's real public source
+      (`github.com/ChristianGaser/cat12/blob/main/cat_conf_stools.m`,
+      since the compiled build here can't be statically inspected):
+      `data_surf`'s cfg_files filter only accepts `^lh.central` — passing
+      an rh path (my first attempt) made the required input invalid; also
+      `tGMV` isn't a real field (full real list: area, gmv, GI, SD, FD,
+      tGI, lGI, GIL, surfaces, norm, FS_HOME, nproc, lazy). Fixed: single
+      lh path (CAT12 finds rh itself, same pattern as `stools.surfresamp`),
+      `tGMV` dropped. Verified job 2 alone (hardcoded path to an existing
+      central surface) ran clean in ~5min producing
+      `lh/rh.{area,gyrification,depth,fractaldimension}` — confirming the
+      field fix. (2) Re-running the FULL two-job batch through the real
+      `apptainer run` interface still failed instantly with the identical
+      error — isolated to `cat_standalone.sh`'s own `<UNDEFINED>`/`-a`
+      substitution mechanism itself, which works fine for a one-job batch
+      but silently breaks once `batch_template.m` has a second job
+      (confirmed by hand-substituting the real path into a template copy
+      and invoking `cat_standalone.sh -b` directly — that ran clean).
+      Root cause inside `cat_standalone.sh` wasn't chased further; fixed
+      by moving the substitution into `%runscript` itself (plain shell —
+      parses `-a`/positional args, builds the `estwrite.data` cell-array
+      literal, sed-substitutes it into a fresh copy of `batch_template.m`,
+      then calls `cat_standalone.sh -b <resolved file>` — no `<UNDEFINED>`,
+      no `-a`, ever). Caller contract unchanged (`bagpipe.app.pipeline.
+      segment` / `bagpipe.preprocess.cat12_cohort` needed no code
+      changes). **Real production incident, self-caused and self-fixed
+      same session**: `outputs/containers/cat12.sif` (the actual deployed
+      image — the earlier "not yet built on this machine" note above was
+      about a *different*, unused `container/cat12.sif` path) got
+      overwritten with the still-broken first attempt before this was
+      caught; reverted from `.bak-2026-08-23` within minutes, verified via
+      checksum, before any real inference/cohort traffic hit it. **Fully
+      verified end-to-end after the real fix**, twice — once via a direct
+      `-b` bypass, once via the actual `apptainer run -a` caller
+      interface — both completed clean with no MATLAB errors and all of
+      `lh/rh.{area,gyrification,depth,fractaldimension}` present.
+      Redeployed to `outputs/containers/cat12.sif` (checksummed against
+      `container/cat12.sif`). Per maintainer's explicit request: the
+      **entire** cohort ledger was reset to `queued` (not just the
+      previously-unprocessed subjects) and a full from-scratch
+      reprocessing of all ~5983 subjects launched in a detached `tmux`
+      session (`cat12_cohort_full`, survives the maintainer logging out;
+      log at `outputs/cat12_cohort_full_run.log`) — every subject,
+      including the ~305 already done under the old pre-surfextract
+      image, gets the full surface panel this time. `config/
+      cat12_cohort.yaml`'s `limit` reset to `null`. Not yet done: the run
+      itself is still in progress (multi-day, per the throughput estimate
+      in `docs/cat12_container_spec.md` §7) — nothing downstream should
+      assume the new surface metrics have real cohort-wide coverage until
+      it finishes.*
+
+      *Update (2026-08-24, same day): modeling side wired up for the new
+      surface metrics, in parallel with the cohort reprocessing above.
+      `bagpipe.models.tabular.build_region_matrix`/`region_columns_for`
+      gained an `atlases` filter (threaded through `stacked.py`/
+      `baseline.py` as `features.atlases`) — needed because every surface
+      metric (thickness included) exists on THREE surface atlases
+      (`surf_DK40`/`surf_Destrieux`/`surf_Schaefer2018N400n7`), and
+      filtering by `metric` alone (the only filter that existed before)
+      pulls all three into one flat matrix — confirmed as the actual
+      cause of the 2026-08-24 CAT26-cohort-modeling r² collapse
+      (0.76→0.59) when only `thickness` was fused that way.
+      `config/models/stacked_v26_surface.yaml` now requests the full
+      panel (`vol_gm, vol_wm, vol_csf, thickness, gyrification,
+      sulcal_depth, fractal_dimension, area`) restricted to
+      `atlases: [Schaefer2018N400n7Tian2020S2, surf_Schaefer2018N400n7]`
+      — one consistent 400-region parcellation across every metric,
+      instead of the volume atlas fighting three different surface
+      atlases for an undersized sample. New test
+      (`test_build_region_matrix_atlases_filter`); full suite (81) + ruff
+      clean. Notebooks updated to describe the panel:
+      `notebooks/surface_atlas_review.ipynb` gained §7 (per-metric
+      coverage/distribution/network-structure) and §8 (why the `atlases`
+      filter matters); `notebooks/stacked_ensemble_review.ipynb`'s stale
+      "why only thickness" note replaced with the real fix description;
+      `notebooks/db_review.ipynb`'s surface section/plots fixed to filter
+      `metric == "thickness"` explicitly (a real bug this update would
+      otherwise have introduced silently — that cell's histogram used to
+      implicitly assume one metric per surface row, now false). **Not yet
+      done, and the actual next step**: nothing above has real cohort-wide
+      data behind it yet — the full reprocessing launched in the previous
+      update is still running. Once it's further along, re-run
+      `bag export training-table --source cat12_v26` and
+      `config/models/stacked_v26_surface.yaml` for a real (not
+      197-sample) leaderboard number, and reconsider promoting a v2
+      production model only once that's trustworthy.*
+
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.
 
@@ -528,9 +876,19 @@ starts with accurate context.
 
 - BIDS root: `/mnt/62/Bids` (SMB share; referenced via config, never hardcoded)
 - CAT12 tabular (ROI/global scalars): `/mnt/62/Processed_Data/derivatives/tabular_cat12` (SMB)
-- CAT12 images (mwp1/wm NIfTI, used for training): `/media/storage/yalab-dev/BIDS/derivatives/CAT12.9_2577.new` (local disk)
+- CAT12 images (mwp1/wm NIfTI, used for training): `/media/storage/yalab-dev/BIDS/derivatives/CAT12.cohort_2026_08` (local disk, `source="cat12_v26"`) — **the only training cohort as of 2026-08-25**; `CAT12.9_2577.new` (`source="cat12"`) is retired, kept on disk only as the pre-CAT26 comparison baseline, see Phase 2's 2026-08-25 update. Cohort is still being reprocessed (`.bagpipe_cat12_ledger.sqlite` under it tracks progress).
 - qsiprep/qsirecon derivatives: `/mnt/62/Processed_Data/derivatives/{qsiprep,qsirecon,tabular}` (SMB, not yet ingested — dMRI is a later phase)
 - Tabular exports directory: `/mnt/62/Processed_Data/derivatives/tabular` (SMB)
 - Shared DB (brainlink + bagpipe tables): `/media/storage/brainlink/brainlink.db`
 - GPU: NVIDIA GeForce RTX 3070 Ti — driver not currently loaded, needs install before Phase 2
 - OS: Ubuntu 24.04.4 LTS; CUDA: not yet installed
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

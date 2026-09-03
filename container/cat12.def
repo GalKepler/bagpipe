@@ -6,9 +6,18 @@ From: ubuntu:22.04
     Purpose "CAT12 standalone (MCR) preprocessing, bit-identical to training preprocessing — DESIGN.md §6"
 
 %help
-    Runs CAT12 segmentation (T1w -> mwp1/p0/catROI + global XML report)
-    against a single NIfTI, no MATLAB license required (MCR-bundled
-    standalone build). Deliberately NOT re-pinned to the exact CAT12.9_2577
+    Runs CAT12 segmentation + full surface pipeline (T1w -> mwp1/p0/catROI
+    + global XML report + surf/{lh,rh}.{thickness,gyrification,depth,
+    fractaldimension,area,central,...}) against a single NIfTI, no MATLAB
+    license required (MCR-bundled standalone build). Surface reconstruction
+    + `surfextract` (job 2, see %post) run on every input as of 2026-08-24
+    — this adds real per-request latency (surface recon alone is ~2-3x a
+    volume-only run, docs/cat12_container_spec.md §7) even for the
+    inference caller, whose production model still only consumes
+    vol_gm/vol_wm/vol_csf — a deliberate tradeoff for one shared template
+    over a faster volume-only inference path (see cat12_container_spec.md
+    §4's "one container, two callers" note for the alternative considered
+    and rejected). Deliberately NOT re-pinned to the exact CAT12.9_2577
     revision used for existing SNBB training features — the maintainer is
     moving to a newer CAT12 release and will re-extract SNBB training
     features with this same container later (docs/DESIGN.md §6's
@@ -165,11 +174,15 @@ From: ubuntu:22.04
     # (163842 vertices = fsaverage 164k, matching CAT12's own atlases_surfaces
     # convention; 201 labels incl. background). Source:
     # ThomasYeoLab/CBIG Schaefer2018_LocalGlobal, FreeSurfer5.3/fsaverage.
-    # Not wired into batch_template.m here — the production inference batch
-    # has output.surface=0 (patched below), so surface ROI extraction is
-    # irrelevant there. It's wired via config/cat12_cohort.yaml's
-    # extra_batch_lines (output.sROImenu.satlases.ownatlas), which is the
-    # only caller that runs the surface pipeline at all.
+    # NOT wired via output.sROImenu.satlases.ownatlas — confirmed
+    # 2026-08-23 to have no effect on this CAT26 build (docs/
+    # cat12_container_spec.md §4b). Regional values in this atlas are
+    # computed post-hoc in Python instead, from CAT12's own native
+    # per-vertex output (bagpipe.app.surface_atlas), for every subject —
+    # segmentation now always runs the surface pipeline (output.surface=1
+    # is the bundled default, no longer patched off, 2026-08-24), so this
+    # applies to every caller (inference and cohort reprocessing), not
+    # just the cohort driver.
     cp /opt/atlas_src/lh.schaefer2018_400p_7n.annot /opt/atlas/
     cp /opt/atlas_src/rh.schaefer2018_400p_7n.annot /opt/atlas/
 
@@ -198,7 +211,6 @@ From: ubuntu:22.04
         -e "s#\(estwrite\.opts\.bias\(acc\|str\) = \)[0-9.eE+-]*;#\10.5;#" \
         -e "s#\(estwrite\.extopts\.segmentation\.APP = \)[0-9]*;#\11070;#" \
         -e "s#\(estwrite\.extopts\.registration\.vox = \)[0-9.]*;#\11.5;#" \
-        -e "s#\(estwrite\.output\.surface = \)[0-9]*;#\10;#" \
         -e "s#\(estwrite\.output\.BIDS\.BIDSno = \)[0-9]*;#\10;#" \
         -e "s#\(estwrite\.output\.ROImenu\.atlases\.neuromorphometrics = \)[0-9]*;#\10;#" \
         -e "s#\(estwrite\.output\.ROImenu\.atlases\.cobra = \)[0-9]*;#\10;#" \
@@ -211,6 +223,66 @@ From: ubuntu:22.04
              "field layout changed in this CAT12 release, update the sed patterns above" >&2
         exit 1
     fi
+
+    # ------------------------------------------------------------------
+    # Job 2: surfextract — gyrification index (GI), sulcal depth (SD),
+    # fractal dimension (FD), per-vertex area. Added 2026-08-24.
+    #
+    # First attempt (data_surf given BOTH lh+rh central paths, plus a
+    # made-up `tGMV` field) broke the WHOLE batch load — "No executable
+    # modules, but still unresolved dependencies or incomplete module
+    # inputs" — a real regression caught by an actual container run
+    # (2026-08-24), not just a no-op like the earlier ownatlas/
+    # surf_measures bugs. Root cause, confirmed against CAT12's real
+    # public source (github.com/ChristianGaser/cat12/blob/main/
+    # cat_conf_stools.m, the `surfextract` cfg_exbranch definition — not
+    # shipped as a standalone .m template in this package, but its cfg
+    # source IS public even though the compiled build here can't be
+    # statically inspected):
+    #   - `data_surf`'s cfg_files UFilter is `^lh.central` — ONLY accepts
+    #     lh.central.*.gii; CAT12 finds the matching rh file itself by
+    #     name substitution (same pattern as `stools.surfresamp`, whose
+    #     standalone template only ever takes one hemisphere's file
+    #     either). Passing an rh path made the required input invalid,
+    #     which is exactly "incomplete module inputs".
+    #   - `tGMV` isn't a real field at all (full real val list: area, gmv,
+    #     GI, SD, FD, tGI, lGI, GIL, surfaces, norm, FS_HOME, nproc, lazy)
+    #     — removed.
+    # Fixed below; re-verified against a real single-subject run
+    # (2026-08-24) before being trusted for the full cohort — see
+    # docs/cat12_container_spec.md §4d for the outcome.
+    #
+    # Chained to job 1 by directly constructing job 1's own deterministic
+    # central-surface output path — NOT cfg_dep. CAT12's cfg_dep
+    # registration for stools.surfextract lives inside the compiled
+    # spm25.ctf archive (no plaintext .m source to read its exact
+    # substruct(...) path from, unlike a GUI-recorded dependency), so a
+    # hand-written cfg_dep here would be unverifiable guesswork of a
+    # different kind. Central-surface naming
+    # (surf/lh.central.<input-stem>.gii, sibling to job 1's input) is
+    # confirmed from a real segmentation run, 2026-08-23 (docs/
+    # cat12_container_spec.md §4a) — job 1 always runs before job 2 here
+    # since spm_jobman executes matlabbatch cells in array order.
+    # Assumes a plain .nii input (single-extension fileparts) — matches
+    # every other assumption in this pipeline (bagpipe.app.pipeline feeds
+    # dcm2niix/pydeface .nii output, never .nii.gz).
+    # ------------------------------------------------------------------
+    cat >> /opt/cat12/batch_template.m <<'MATLABEOF'
+
+[cat_input_dir, cat_input_name] = fileparts(matlabbatch{1}.spm.tools.cat.estwrite.data{1});
+cat_surf_dir = fullfile(cat_input_dir, 'surf');
+matlabbatch{2}.spm.tools.cat.stools.surfextract.data_surf = { ...
+    fullfile(cat_surf_dir, ['lh.central.' cat_input_name '.gii']) ...
+};
+matlabbatch{2}.spm.tools.cat.stools.surfextract.area = 1;
+matlabbatch{2}.spm.tools.cat.stools.surfextract.gmv = 0;
+matlabbatch{2}.spm.tools.cat.stools.surfextract.GI = 1;
+matlabbatch{2}.spm.tools.cat.stools.surfextract.FD = 1;
+matlabbatch{2}.spm.tools.cat.stools.surfextract.SD = 1;
+matlabbatch{2}.spm.tools.cat.stools.surfextract.nproc = 0;
+matlabbatch{2}.spm.tools.cat.stools.surfextract.lazy = 0;
+MATLABEOF
+
     echo "BATCH_TEMPLATE=/opt/cat12/batch_template.m" >> /opt/cat12/paths.env
 
     # ------------------------------------------------------------------
@@ -273,22 +345,68 @@ From: ubuntu:22.04
     fi
     . /opt/cat12/paths.env
     mkdir -p "$MCR_CACHE_ROOT"
-    # cat_standalone.sh handles <UNDEFINED> batch substitution itself —
-    # input file(s) are plain trailing positional args (matches its own
-    # documented usage and a real reference implementation,
-    # jhuguetn/cat12-docker). -pr 1 skips PDF/surface report rendering
-    # (no OpenGL in a headless container). Output lands flat next to each
-    # input (BIDS mode patched off above) — no output-dir arg exists.
+
+    # ------------------------------------------------------------------
+    # Real bug, found + fixed 2026-08-24: cat_standalone.sh's own
+    # <UNDEFINED>/-a substitution mechanism (the previous approach here —
+    # input file(s) as trailing positional args, extra batch lines via
+    # `-a "..."`, matching jhuguetn/cat12-docker's documented usage)
+    # WORKS FINE for a single-job batch_template.m, but silently breaks
+    # once BATCH_TEMPLATE has a second job (matlabbatch{2}, added for
+    # `surfextract`/GI/SD/FD, see %post below) — every run failed
+    # instantly with "No executable modules, but still unresolved
+    # dependencies or incomplete module inputs.", even though job 2's own
+    # fields were independently confirmed correct (tested job 2 alone,
+    # against a real already-existing central-surface file, standalone —
+    # ran clean end to end). Isolated by hand-substituting the real input
+    # path directly into a copy of BATCH_TEMPLATE and invoking
+    # cat_standalone.sh's own `-b` flag directly (bypassing its
+    # <UNDEFINED> substitution and -a mechanism entirely) — that ran the
+    # full real pipeline with no error. So the substitution mechanism
+    # itself, not the two-job batch structure, was broken for >1 job;
+    # root cause inside cat_standalone.sh's own (compiled-adjacent,
+    # shell-wrapped) substitution logic wasn't chased further since a
+    # clean workaround exists: do the substitution ourselves, in plain
+    # shell, and always call cat_standalone.sh with an already-resolved
+    # `-b` batch file — no <UNDEFINED>, no `-a`, regardless of job count.
     #
-    # "$@" (not "$1") forwards every trailing arg, not just the first —
-    # this is what lets the same image serve two callers with different
-    # needs without drifting apart: bagpipe.app.pipeline.segment (inference,
-    # one file, no extra args, unaffected by this change) and
-    # scripts/run_cat12_cohort.py (bulk SNBB reprocessing, passes extra
-    # `-a "matlabbatch{...}=...;"` lines to turn on surface/thickness/extra
-    # atlases and multiple T1w files per invocation for CAT12's own
-    # internal nproc parallelism) — both share the exact same segmentation
-    # core (affreg/biasstr/APP/vox/atlas), which is the actual
-    # training-inference parity invariant DESIGN.md cares about; only
-    # optional OUTPUT/feature-export options differ per caller.
-    exec "$CAT_STANDALONE_SH" -m "$MCR_ROOT" -b "$BATCH_TEMPLATE" -pr 1 "$@"
+    # Call contract (unchanged from the caller's point of view —
+    # bagpipe.app.pipeline.segment / bagpipe.preprocess.cat12_cohort don't
+    # need to change): `apptainer run cat12.sif [-a "<extra batch
+    # lines>"] <T1w file> [<T1w file> ...]`.
+    # ------------------------------------------------------------------
+    combined_add=""
+    if [ "$1" = "-a" ]; then
+        combined_add="$2"
+        shift 2
+    fi
+    if [ "$#" -eq 0 ]; then
+        echo "no input T1w file(s) given" >&2
+        exit 1
+    fi
+
+    data_literal="{"
+    for f in "$@"; do
+        data_literal="${data_literal}'${f}';"
+    done
+    data_literal="${data_literal}}"
+
+    run_batch=$(mktemp /tmp/cat_run_XXXXXX.m)
+    sed "s#matlabbatch{1}\.spm\.tools\.cat\.estwrite\.data = '<UNDEFINED>';#matlabbatch{1}.spm.tools.cat.estwrite.data = ${data_literal};#" \
+        "$BATCH_TEMPLATE" > "$run_batch"
+    if ! grep -qF "matlabbatch{1}.spm.tools.cat.estwrite.data = {'" "$run_batch"; then
+        echo "runtime substitution of the estwrite.data field failed —" \
+             "BATCH_TEMPLATE's data-field line no longer matches this script's sed pattern" >&2
+        exit 1
+    fi
+    if [ -n "$combined_add" ]; then
+        printf '%s\n' "$combined_add" >> "$run_batch"
+    fi
+
+    # -pr 1 skips PDF/surface report rendering (no OpenGL in a headless
+    # container). Output lands flat next to each input (BIDS mode patched
+    # off in %post) — no output-dir arg exists. Both callers (inference,
+    # one file, no extra args; cohort reprocessing, extra atlas/output
+    # lines via -a) share this exact segmentation core — see %post's sed
+    # patch list for the training-inference parity invariant.
+    exec "$CAT_STANDALONE_SH" -m "$MCR_ROOT" -b "$run_batch" -pr 1

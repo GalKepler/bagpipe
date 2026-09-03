@@ -1,0 +1,226 @@
+{
+  "401": {
+    "hemisphere": "R",
+    "index": 401,
+    "label": "aHIP-rh",
+    "name": "aHIP-rh",
+    "network": "subcortex"
+  },
+  "402": {
+    "hemisphere": "R",
+    "index": 402,
+    "label": "pHIP-rh",
+    "name": "pHIP-rh",
+    "network": "subcortex"
+  },
+  "403": {
+    "hemisphere": "R",
+    "index": 403,
+    "label": "lAMY-rh",
+    "name": "lAMY-rh",
+    "network": "subcortex"
+  },
+  "404": {
+    "hemisphere": "R",
+    "index": 404,
+    "label": "mAMY-rh",
+    "name": "mAMY-rh",
+    "network": "subcortex"
+  },
+  "405": {
+    "hemisphere": "R",
+    "index": 405,
+    "label": "THA-DP-rh",
+    "name": "THA-DP-rh",
+    "network": "subcortex"
+  },
+  "406": {
+    "hemisphere": "R",
+    "index": 406,
+    "label": "THA-VP-rh",
+    "name": "THA-VP-rh",
+    "network": "subcortex"
+  },
+  "407": {
+    "hemisphere": "R",
+    "index": 407,
+    "label": "THA-VA-rh",
+    "name": "THA-VA-rh",
+    "network": "subcortex"
+  },
+  "408": {
+    "hemisphere": "R",
+    "index": 408,
+    "label": "THA-DA-rh",
+    "name": "THA-DA-rh",
+    "network": "subcortex"
+  },
+  "409": {
+    "hemisphere": "R",
+    "index": 409,
+    "label": "NAc-shell-rh",
+    "name": "NAc-shell-rh",
+    "network": "subcortex"
+  },
+  "410": {
+    "hemisphere": "R",
+    "index": 410,
+    "label": "NAc-core-rh",
+    "name": "NAc-core-rh",
+    "network": "subcortex"
+  },
+  "411": {
+    "hemisphere": "R",
+    "index": 411,
+    "label": "pGP-rh",
+    "name": "pGP-rh",
+    "network": "subcortex"
+  },
+  "412": {
+    "hemisphere": "R",
+    "index": 412,
+    "label": "aGP-rh",
+    "name": "aGP-rh",
+    "network": "subcortex"
+  },
+  "413": {
+    "hemisphere": "R",
+    "index": 413,
+    "label": "aPUT-rh",
+    "name": "aPUT-rh",
+    "network": "subcortex"
+  },
+  "414": {
+    "hemisphere": "R",
+    "index": 414,
+    "label": "pPUT-rh",
+    "name": "pPUT-rh",
+    "network": "subcortex"
+  },
+  "415": {
+    "hemisphere": "R",
+    "index": 415,
+    "label": "aCAU-rh",
+    "name": "aCAU-rh",
+    "network": "subcortex"
+  },
+  "416": {
+    "hemisphere": "R",
+    "index": 416,
+    "label": "pCAU-rh",
+    "name": "pCAU-rh",
+    "network": "subcortex"
+  },
+  "417": {
+    "hemisphere": "L",
+    "index": 417,
+    "label": "aHIP-lh",
+    "name": "aHIP-lh",
+    "network": "subcortex"
+  },
+  "418": {
+    "hemisphere": "L",
+    "index": 418,
+    "label": "pHIP-lh",
+    "name": "pHIP-lh",
+    "network": "subcortex"
+  },
+  "419": {
+    "hemisphere": "L",
+    "index": 419,
+    "label": "lAMY-lh",
+    "name": "lAMY-lh",
+    "network": "subcortex"
+  },
+  "420": {
+    "hemisphere": "L",
+    "index": 420,
+    "label": "mAMY-lh",
+    "name": "mAMY-lh",
+    "network": "subcortex"
+  },
+  "421": {
+    "hemisphere": "L",
+    "index": 421,
+    "label": "THA-DP-lh",
+    "name": "THA-DP-lh",
+    "network": "subcortex"
+  },
+  "422": {
+    "hemisphere": "L",
+    "index": 422,
+    "label": "THA-VP-lh",
+    "name": "THA-VP-lh",
+    "network": "subcortex"
+  },
+  "423": {
+    "hemisphere": "L",
+    "index": 423,
+    "label": "THA-VA-lh",
+    "name": "THA-VA-lh",
+    "network": "subcortex"
+  },
+  "424": {
+    "hemisphere": "L",
+    "index": 424,
+    "label": "THA-DA-lh",
+    "name": "THA-DA-lh",
+    "network": "subcortex"
+  },
+  "425": {
+    "hemisphere": "L",
+    "index": 425,
+    "label": "NAc-shell-lh",
+    "name": "NAc-shell-lh",
+    "network": "subcortex"
+  },
+  "426": {
+    "hemisphere": "L",
+    "index": 426,
+    "label": "NAc-core-lh",
+    "name": "NAc-core-lh",
+    "network": "subcortex"
+  },
+  "427": {
+    "hemisphere": "L",
+    "index": 427,
+    "label": "pGP-lh",
+    "name": "pGP-lh",
+    "network": "subcortex"
+  },
+  "428": {
+    "hemisphere": "L",
+    "index": 428,
+    "label": "aGP-lh",
+    "name": "aGP-lh",
+    "network": "subcortex"
+  },
+  "429": {
+    "hemisphere": "L",
+    "index": 429,
+    "label": "aPUT-lh",
+    "name": "aPUT-lh",
+    "network": "subcortex"
+  },
+  "430": {
+    "hemisphere": "L",
+    "index": 430,
+    "label": "pPUT-lh",
+    "name": "pPUT-lh",
+    "network": "subcortex"
+  },
+  "431": {
+    "hemisphere": "L",
+    "index": 431,
+    "label": "aCAU-lh",
+    "name": "aCAU-lh",
+    "network": "subcortex"
+  },
+  "432": {
+    "hemisphere": "L",
+    "index": 432,
+    "label": "pCAU-lh",
+    "name": "pCAU-lh",
+    "network": "subcortex"
+  }
+}

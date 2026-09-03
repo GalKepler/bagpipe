@@ -1,0 +1,30 @@
+# Template — copy to /etc/systemd/system/bagpipe-worker.service and fill in
+# WorkingDirectory/ExecStart/User for this machine.
+#
+# Runs the Huey consumer that actually executes jobs (CAT12 -> predict ->
+# report -> email). Single GPU + single Apptainer CAT12 run at a time on this
+# workstation (CLAUDE.md: single workstation, single GPU) — do not raise
+# --workers above 1 without also checking CAT12/GPU memory headroom.
+#
+# TimeoutStopSec is generous: a CAT12 run can be mid-flight (up to
+# timeout_minutes in config/cat12_cohort.yaml, default 90) when systemd asks
+# it to stop; give it a chance to notice SIGTERM between stages rather than
+# getting SIGKILLed mid-job.
+
+[Unit]
+Description=bagpipe job queue worker (CAT12 -> predict -> report -> email)
+After=network.target
+
+[Service]
+Type=simple
+User=bagpipe
+WorkingDirectory=/opt/bagpipe
+Environment=PATH=/opt/bagpipe/.venv/bin
+ExecStart=/opt/bagpipe/.venv/bin/bag app worker --workers 1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

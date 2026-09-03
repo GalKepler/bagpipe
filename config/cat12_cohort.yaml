@@ -100,8 +100,11 @@ skip_existing: false
 # request cost — unlike the inference container, which deliberately drops
 # all of this for latency (docs/cat12_container_spec.md §4).
 extra_batch_lines:
-  # Surface reconstruction + cortical thickness — ENABLED (root-caused +
-  # fixed 2026-08-23, was DISABLED before). Real cause: apptainer leaks the
+  # Surface reconstruction + cortical thickness — ENABLED, and since
+  # 2026-08-24 always on for every caller (container/cat12.def's
+  # batch_template.m default, no longer patched to 0 for inference) — no
+  # override line needed here for that anymore. Root-caused + fixed
+  # 2026-08-23 (was DISABLED before, real cause: apptainer leaks the
   # host's $SHELL (zsh) into the container by default; MATLAB's compiled
   # runtime uses $SHELL to spawn every external system() call, including
   # every CAT_* surface/thickness binary. zsh doesn't exist in the Ubuntu
@@ -116,8 +119,19 @@ extra_batch_lines:
   # Verified end-to-end: a real subject through this exact mechanism
   # produced full surf/lh.*.gii + surf/rh.*.gii + thickness maps, no errors,
   # SIQR 88.25% (B+), ~53min total (well under timeout_minutes above).
-  - "matlabbatch{1}.spm.tools.cat.estwrite.output.surface = 1;"
-  - "matlabbatch{1}.spm.tools.cat.estwrite.output.surf_measures = 1;"
+  #
+  # `output.surf_measures = 1` (previously listed here) was a REAL BUG,
+  # found 2026-08-24: no such field exists in cat_standalone_segment.m's
+  # schema — silently ignored (confirmed: real cohort output on disk had
+  # no gyrification/depth/fractaldimension files despite this line).
+  # Gyrification/sulcal-depth/fractal-dimension/area are a genuinely
+  # separate CAT12 module (`stools.surfextract`), now wired as job 2 in
+  # container/cat12.def's batch_template.m instead — NOT a batch-line
+  # toggle, see that file's %post for the real fix. Not yet verified
+  # against a real container run (no .sif built as of 2026-08-24) — re-run
+  # this cohort driver on `limit: 2` after rebuilding and confirm
+  # surf/{lh,rh}.{gyrification,depth,fractaldimension,area}.* exist before
+  # trusting it for the full cohort.
   - "matlabbatch{1}.spm.tools.cat.estwrite.output.ct.native = 1;"
   - "matlabbatch{1}.spm.tools.cat.estwrite.output.ct.warped = 1;"
   - "matlabbatch{1}.spm.tools.cat.estwrite.output.pp.native = 1;"

@@ -3,6 +3,12 @@
 Loads the production model + fits its Cole correction from its own stored
 `predictions` rows (always in sync with the deployed artifact, no separate
 corrector-persistence step — same approach as the old flat pipeline.py).
+
+Chronological age here is self-reported by the uploader and never verified.
+This stage deliberately never writes to the `predictions` table (that's
+populated only by CV/promote runs against the verified SNBB cohort) — app
+uploads must never enter the training set, since there is no way to confirm
+the reported age is real.
 """
 
 from __future__ import annotations

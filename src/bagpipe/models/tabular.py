@@ -29,6 +29,7 @@ SEX_MAP = {
 def build_region_matrix(
     datasets_dir: Path | None = None,
     metrics: list[str] | None = None,
+    atlases: list[str] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], np.ndarray]:
     """Returns (X, y, groups, region_columns, session_ids).
 
@@ -43,6 +44,22 @@ def build_region_matrix(
     callers building a flat model should pass an explicit single-metric
     list. The stacked ensemble (`build_region_mapping`) is the one consumer
     that legitimately wants all metrics — grouped per region, not flattened.
+
+    `atlases` filters which atlas(es) contribute columns. Matters for a
+    surface metric (thickness/gyrification/sulcal_depth/fractal_dimension):
+    it exists on THREE surface atlases (surf_DK40, surf_Destrieux, and the
+    custom surf_Schaefer2018N400n7 that actually matches the volume atlas'
+    parcellation) — filtering by metric alone pulls in all three, which
+    explodes per-region base-learner count. A surface-fusion config should
+    still pass `atlases=["Schaefer2018N400n7Tian2020S2",
+    "surf_Schaefer2018N400n7"]` to keep one consistent parcellation instead
+    of `None` (every atlas).
+
+    Rows missing individual region columns are kept (NaN passed through) —
+    a session missing one metric/atlas no longer drops the whole row.
+    `TIVSexAdjustedRegressor` median-imputes region NaNs fold-internally
+    (fit on train only) before use, so this stays leakage-safe. Only rows
+    missing `age`/`sex`/`TIV` (essential, rarely missing) are dropped.
     """
     datasets_dir = datasets_dir or get_path("datasets_dir")
     regional = pd.read_parquet(datasets_dir / "regional.parquet")
@@ -51,6 +68,8 @@ def build_region_matrix(
     regional = regional.copy()
     if metrics is not None:
         regional = regional[regional["metric"].isin(metrics)]
+    if atlases is not None:
+        regional = regional[regional["atlas"].isin(atlases)]
     regional["region_col"] = (
         regional["atlas"] + "__" + regional["region"] + "__" + regional["metric"]
     )
@@ -63,7 +82,7 @@ def build_region_matrix(
     covariates["sex"] = covariates["sex"].map(SEX_MAP)
 
     table = wide.merge(covariates, on=["subject_key", "session_id"], how="inner")
-    table = table.dropna(subset=["age", "sex", "TIV", *region_columns])
+    table = table.dropna(subset=["age", "sex", "TIV"])
 
     X = table[[*region_columns, "TIV", "sex"]].to_numpy(dtype=float)
     y = table["age"].to_numpy(dtype=float)
@@ -72,18 +91,24 @@ def build_region_matrix(
     return X, y, groups, region_columns, session_ids
 
 
-def region_columns_for(metrics: list[str], datasets_dir: Path | None = None) -> list[str]:
+def region_columns_for(
+    metrics: list[str], datasets_dir: Path | None = None, atlases: list[str] | None = None
+) -> list[str]:
     """The `atlas__region__metric` column order `build_region_matrix` would
-    produce for `metrics` — i.e. what a promoted model's `X` columns are,
-    without needing age/sex/TIV or a merge. Used at inference time (Pillar
-    4) to align a single freshly-parsed session onto the trained column
-    space; `pivot_table`'s columns are alphabetically sorted, same as here.
+    produce for `metrics`/`atlases` — i.e. what a promoted model's `X`
+    columns are, without needing age/sex/TIV or a merge. Used at inference
+    time (Pillar 4) to align a single freshly-parsed session onto the
+    trained column space; `pivot_table`'s columns are alphabetically
+    sorted, same as here.
     """
     datasets_dir = datasets_dir or get_path("datasets_dir")
     regional = pd.read_parquet(
         datasets_dir / "regional.parquet", columns=["atlas", "region", "metric"]
     )
-    regional = regional[regional["metric"].isin(metrics)].drop_duplicates()
+    regional = regional[regional["metric"].isin(metrics)]
+    if atlases is not None:
+        regional = regional[regional["atlas"].isin(atlases)]
+    regional = regional.drop_duplicates()
     cols = regional["atlas"] + "__" + regional["region"] + "__" + regional["metric"]
     return sorted(cols.unique().tolist())
 

@@ -137,5 +137,5 @@ bag app serve --host 127.0.0.1 --port 8000    # FastAPI upload/predict endpoint
 bag app worker --workers 1                     # Huey job queue consumer
 ```
 
-Not yet production-verified end to end (see CLAUDE.md Phase 4 status) —
-useful for local testing of the upload → CAT12 → predict flow.
+For local testing. For deployment (systemd units, reverse proxy, SMTP,
+retention/consent, pre-production checklist) see `deploy/README.md`.

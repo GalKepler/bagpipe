@@ -1,0 +1,8 @@
+# docs/cat12_container_spec.md §6 — CAT12 reproducibility acceptance test.
+# bag preprocess repro-test --config config/repro_test.yaml
+
+n_stratified: 12   # sampled across age tertile x sex
+n_stress: 2        # additional lowest-IQR subjects in the cohort
+concurrency: 3     # concurrent apptainer runs (~4 cores/6-12GB RAM each, see §7)
+model_name: stacked
+work_dir: /media/storage/bagpipe/outputs/repro_test   # per-subject job workspaces, kept for inspection
