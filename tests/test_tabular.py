@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from bagpipe.models.tabular import build_region_matrix, region_columns_for
+from bagpipe.models.tabular import build_region_mapping, build_region_matrix, region_columns_for
 
 
 def test_build_region_matrix(tmp_path):
@@ -167,3 +167,46 @@ def test_region_columns_for(tmp_path):
         "a__R1__vol_wm",
         "a__R2__vol_gm",
     ]
+
+
+def test_build_region_mapping_fuses_surface_and_volume():
+    """The volume atlas calls a region 'LH_Cont_Cing_1'; the surface atlas
+    calls the exact same region '7Networks_LH_Cont_Cing_1' — a region's
+    volume and its surface metrics must land in ONE base-learner group, not
+    two independent single-modality ones (the 2026-09 fix)."""
+    columns = [
+        "Schaefer2018N400n7Tian2020S2__LH_Cont_Cing_1__vol_gm",
+        "Schaefer2018N400n7Tian2020S2__LH_Cont_Cing_1__vol_wm",
+        "surf_Schaefer2018N400n7__7Networks_LH_Cont_Cing_1__thickness",
+    ]
+    mapping = build_region_mapping(columns)
+    assert len(mapping) == 1
+    (group,) = mapping.values()
+    assert sorted(group) == [0, 1, 2]
+
+
+def test_build_region_mapping_keeps_tian_subcortical_volume_only():
+    """Tian subcortical regions (part of the volume atlas) have no surface
+    counterpart — canonicalizing a name nothing else matches must stay a
+    singleton, not accidentally merge with an unrelated region."""
+    columns = [
+        "Schaefer2018N400n7Tian2020S2__NAc-core-lh__vol_gm",
+        "Schaefer2018N400n7Tian2020S2__LH_Cont_Cing_1__vol_gm",
+        "surf_Schaefer2018N400n7__7Networks_LH_Cont_Cing_1__thickness",
+    ]
+    mapping = build_region_mapping(columns)
+    assert len(mapping) == 2
+    assert mapping["NAc-core-lh"] == [0]
+
+
+def test_build_region_mapping_does_not_fuse_across_different_parcellations():
+    """surf_DK40 is a different parcellation from the Schaefer volume atlas
+    — even if a region name happened to collide, only atlases explicitly
+    marked fusible (the two Schaefer2018N400n7 variants) should merge."""
+    columns = [
+        "Schaefer2018N400n7Tian2020S2__LH_Cont_Cing_1__vol_gm",
+        "surf_DK40__LH_Cont_Cing_1__thickness",
+    ]
+    mapping = build_region_mapping(columns)
+    assert len(mapping) == 2
+    assert set(mapping) == {"LH_Cont_Cing_1", "surf_DK40__LH_Cont_Cing_1"}

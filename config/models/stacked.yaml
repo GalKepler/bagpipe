@@ -1,11 +1,12 @@
 # bag models train-stacked --config config/models/stacked.yaml
 features:
-  metrics: [vol_gm, vol_wm, vol_csf] # all metrics, grouped per region (not flattened)
-  # thickness (surface, aparc_DK40/aparc_a2009s) is ingested but not in the
-  # default set yet: only 2/180 reprocessed sessions have surface output as
-  # of 2026-08-23 (reconstruction just enabled) — adding it here would drop
-  # ~all rows via build_region_matrix's dropna. Add once cohort coverage is
-  # real. See config/models/stacked_surface.yaml for an opt-in variant.
+  metrics: [vol_gm, vol_wm, vol_csf] # grouped per region (not flattened)
+  # This config trains on the retired pooled `cat12` source (no datasets_dir
+  # override -> get_path("datasets_dir")). Volume-only by choice — surface
+  # metrics live on a different atlas (surf_*) and, as of the region-mapping
+  # fusion fix, sharing them with volume needs `atlases:` restricted to one
+  # parcellation family (see stacked_v26_surface.yaml). Use stacked_v26.yaml
+  # for the current (CAT26) training cohort.
 stacker:
   base_estimator:
     type: ridgecv

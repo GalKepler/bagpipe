@@ -17,26 +17,67 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def build_success_email(to_addr: str, from_addr: str, pdf_path: Path) -> EmailMessage:
+def build_success_email(
+    to_addr: str,
+    from_addr: str,
+    pdf_path: Path,
+    results_url: str | None = None,
+) -> EmailMessage:
+    """Result email. The PDF is an attachment, not the only copy — if it is
+    missing or unreadable the mail still goes out with the results link, since
+    an email that silently never arrives is worse than one without its
+    attachment. (Before this guard, a missing PDF raised out of the queue task
+    and, as a side effect, skipped the retention cleanup entirely.)
+    """
     msg = EmailMessage()
     msg["Subject"] = "Your Brain Age Gap report"
     msg["From"] = from_addr
     msg["To"] = to_addr
-    msg.set_content(
-        "Your uploaded scan has been processed. Your Brain Age Gap report is attached as a PDF."
-    )
-    msg.add_attachment(
-        pdf_path.read_bytes(), maintype="application", subtype="pdf", filename="bag_report.pdf"
-    )
+
+    body = ["Your uploaded scan has been processed."]
+    if results_url:
+        body.append(f"View your interactive results: {results_url}")
+
+    try:
+        pdf_bytes = pdf_path.read_bytes()
+    except OSError:
+        logger.exception("could not read report PDF at %s — sending email without it", pdf_path)
+        body.append(
+            "We couldn't attach your PDF report to this email, but your results "
+            "are available at the link above."
+            if results_url
+            else "We couldn't attach your PDF report to this email. Please contact us."
+        )
+        msg.set_content("\n\n".join(body))
+        return msg
+
+    body.append("Your Brain Age Gap report is attached as a PDF.")
+    msg.set_content("\n\n".join(body))
+    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="bag_report.pdf")
     return msg
 
 
-def build_failure_email(to_addr: str, from_addr: str, user_message: str) -> EmailMessage:
+def build_failure_email(
+    to_addr: str,
+    from_addr: str,
+    user_message: str,
+    *,
+    retained: bool = False,
+) -> EmailMessage:
+    """`retained` must reflect the uploader's actual per-upload consent — this
+    mail makes a privacy claim, and asserting "nothing was retained" to someone
+    who opted INTO retention would be a false statement, not just sloppy copy.
+    """
     msg = EmailMessage()
     msg["Subject"] = "We couldn't process your Brain Age Gap upload"
     msg["From"] = from_addr
     msg["To"] = to_addr
-    msg.set_content(f"{user_message}\n\nNo further data was retained from this upload.")
+    tail = (
+        "You asked us to keep your uploaded scan, so it has been retained."
+        if retained
+        else "No further data was retained from this upload."
+    )
+    msg.set_content(f"{user_message}\n\n{tail}")
     return msg
 
 

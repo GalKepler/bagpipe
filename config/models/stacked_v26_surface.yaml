@@ -3,10 +3,12 @@
 # cortical thickness, gyrification index, sulcal depth, fractal dimension,
 # and per-vertex area — everything CAT12's surfextract module produces
 # (container/cat12.def job 2, wired 2026-08-24; see
-# docs/cat12_container_spec.md §4d). build_region_matrix drops any session
-# missing a metric column, so this trains on the surface subset only —
-# compare its n_regions/n_samples in the printed run info against
-# stacked_v26.yaml's before trusting a leaderboard comparison between them.
+# docs/cat12_container_spec.md §4d). build_region_matrix median-imputes
+# missing region columns fold-internally rather than dropping rows, so this
+# trains on ~the same session pool as stacked_v26.yaml (surface coverage is
+# now ~93% of the reprocessed cohort) — still worth diffing n_samples in the
+# printed run info, since a session can still be dropped for missing
+# age/sex/TIV.
 #
 # `features.atlases` restricts to the Schaefer2018N400n7 parcellation on
 # BOTH the volume side (Schaefer2018N400n7Tian2020S2, the production

@@ -28,69 +28,91 @@ Build (or copy) `container/cat12.sif` to the path in `config/local.yaml`'s
 
 ## systemd
 
+The `.service` files in `deploy/systemd/` are **templates with placeholder
+paths** — this repo is public and machine-specific paths never get committed
+as real values (CLAUDE.md). Fill in `User`, `WorkingDirectory` and `ExecStart`
+for your machine before installing.
+
+Two deployment shapes work:
+
+**System units** (dedicated service account, `/opt/bagpipe` checkout):
+
 ```bash
 sudo cp deploy/systemd/bagpipe-api.service deploy/systemd/bagpipe-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now bagpipe-api bagpipe-worker
-sudo journalctl -u bagpipe-api -u bagpipe-worker -f   # tail logs
+sudo journalctl -u bagpipe-api -u bagpipe-worker -f
 ```
 
-Edit the two `.service` files first — `User`, `WorkingDirectory`, and
-`ExecStart`'s venv path are placeholders, not real values (this repo is
-public; machine-specific paths never get committed as real values, per
-CLAUDE.md).
+**User units** (run as the maintainer's own account, which is what a
+single-workstation deployment usually wants — the worker needs the venv, the
+Apptainer image, `outputs/`, and the shared database, all owned by that user):
 
-## Reverse proxy (required)
+```bash
+# real, machine-specific units live here, NOT in the repo
+cp deploy/systemd/*.service ~/.config/systemd/user/   # then edit paths
+systemctl --user daemon-reload
+systemctl --user enable --now bagpipe-api bagpipe-worker bagpipe-tunnel
+journalctl --user -u bagpipe-api -u bagpipe-worker -f
 
-`bag app serve` binds `127.0.0.1` by default and has **no authentication**.
-Put a TLS-terminating reverse proxy in front for anything beyond local
-testing — the app handles uploaded medical imaging, so it must never be
-reachable over plain HTTP or directly on a public interface. Example nginx:
-
-Get a free TLS cert for your domain with
-[Certbot](https://certbot.eff.org/) (`sudo certbot --nginx -d
-bagpipe.example.org`) before using the config below — it fills in the
-`ssl_certificate` paths for you.
-
-```nginx
-limit_req_zone $binary_remote_addr zone=bagpipe_predict:10m rate=2r/h;
-
-server {
-    listen 443 ssl;
-    server_name bagpipe.example.org;
-    ssl_certificate     /etc/letsencrypt/live/bagpipe.example.org/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/bagpipe.example.org/privkey.pem;
-
-    client_max_body_size 200M;   # T1w NIfTI/DICOM zips can run large
-    proxy_read_timeout 60s;      # /predict returns fast (202); /jobs polls are cheap
-
-    location /predict {
-        limit_req zone=bagpipe_predict burst=2 nodelay;  # per-IP: ~2 uploads/hour
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
+# REQUIRED, or the services stop the moment you log out:
+sudo loginctl enable-linger "$USER"
 ```
 
-The `limit_req` above is a coarse per-IP throttle (catches one script hammering
-the endpoint from one address); Turnstile below is the real anti-bot gate.
-Adjust `rate=2r/h` to whatever throughput your GPU can actually sustain — see
-§ Public-abuse protection.
+Notes for the worker unit: leave `PrivateTmp` **off** — Apptainer's
+`--writable-tmpfs` and the MATLAB runtime need the real `/tmp`. Put `dcm2niix`
+(FSL) and `pydeface` (venv) on the unit's `PATH`; systemd does not read your
+shell profile. Use a generous `TimeoutStopSec` so a mid-flight CAT12 run gets
+a chance to notice `SIGTERM` instead of being `SIGKILL`ed.
+
+## Public ingress — Cloudflare Tunnel
+
+`bag app serve` binds `127.0.0.1` and has **no authentication**, so it must
+never sit on a public interface. This deployment fronts it with a **Cloudflare
+Tunnel** rather than a local reverse proxy: the tunnel connects *outbound* to
+Cloudflare, so no inbound port is open on the host and no institutional
+firewall change is needed. Cloudflare terminates TLS.
+
+There is deliberately **no nginx/caddy in this deployment** — the tunnel does
+what the proxy would have done, and Cloudflare's own rate-limiting rules
+replace `limit_req`. One less moving part to keep alive.
+
+```bash
+# one-time, interactive (opens a browser; pick your zone)
+cloudflared tunnel login
+cloudflared tunnel create bagpipe
+cloudflared tunnel route dns bagpipe <your-hostname>   # writes the CNAME for you
+```
+
+`~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: bagpipe
+credentials-file: /home/<user>/.cloudflared/<tunnel-id>.json
+ingress:
+  - hostname: <your-hostname>
+    service: http://127.0.0.1:8000
+  - service: http_status:404
+```
+
+Then run it as a third unit alongside the api and worker (`Restart=always`).
+
+**Upload size**: with no proxy there is no `client_max_body_size`, so the cap
+is enforced in-app by `app.max_upload_size_mb`. Cloudflare's free-plan
+request-body limit (**100 MB**) applies first and is the real ceiling for
+anything arriving through the tunnel, so keep `max_upload_size_mb` at or below
+100 — otherwise Cloudflare rejects large DICOM zips at the edge with a 413 the
+app never sees and cannot explain to the user. Raise both together only on a
+paid plan.
 
 ## Public-abuse protection
 
-Each accepted `/predict` costs roughly an hour of the app's single GPU
-(`bagpipe.preprocess`/`bagpipe.app.pipeline.segment`'s CAT12 run). Since this
-app is meant to be open to the general public with no login, that single GPU
-is the thing to protect — three layers, all already wired in code, that you
-turn on via config:
+Each accepted `/predict` costs roughly an hour of wall-clock on this
+workstation (`bagpipe.app.pipeline.segment`'s CAT12 run — CPU-bound MATLAB/MCR,
+**not** GPU; the GPU is only used for SFCN training, which is not in the
+serving path). One job runs at a time and the box is also running the cohort
+reprocess, so throughput is the thing to protect — three layers, all already
+wired in code, that you turn on via config:
 
 1. **Cloudflare Turnstile** (`app.turnstile_site_key`/`turnstile_secret_key`)
    — a free, privacy-respecting CAPTCHA alternative (no user-facing puzzle in
@@ -101,13 +123,15 @@ turn on via config:
    fine for local dev, **not for a public deployment**.
 2. **`app.max_queue_depth`** (default 5) — `/predict` returns `503` once
    this many jobs are already queued/running, instead of letting an
-   unbounded backlog build up behind the single GPU.
-3. **nginx `limit_req`** above — a blunt per-IP rate limit as a first line of
-   defense before a request even reaches the app.
+   unbounded backlog build up behind the single worker.
+3. **Cloudflare rate-limiting rule** — Security -> WAF -> Rate limiting rules,
+   scoped to the `/predict` path (e.g. 2 requests/hour per IP). Blocks abuse at
+   Cloudflare's edge, before it costs you a request. Replaces the nginx
+   `limit_req` this deployment no longer has.
 
 None of these require an account system — the upload page at `GET /` stays
 open to anyone, which is what "general public, no login" means here; they
-just stop it from being a free unlimited-GPU-time faucet.
+just stop it from being a free unlimited-compute faucet.
 
 ## SMTP (sending the report email)
 
@@ -140,30 +164,61 @@ same way — host/port/user/password from their dashboard.
 
 ## Privacy / retention
 
-Uploaded imaging (defaced T1w + raw CAT12 output) is deleted after each job
-finishes unless the uploader passes `retain_uploads=true` on `POST
-/predict` — this is the uploader's own explicit per-upload consent, not a
-server-wide setting (`bagpipe.app.queue._delete_imaging`). There is no
-retention *duration* control yet — an opted-in job's data stays until
-someone manually cleans `paths.uploads_dir`.
+Uploaded imaging is deleted after each job finishes unless the uploader passes
+`retain_uploads=true` on `POST /predict` — the uploader's own explicit
+per-upload consent, not a server-wide setting
+(`bagpipe.app.queue._delete_imaging`).
+
+"Imaging" means all four locations, and getting this list wrong is how the
+promise quietly becomes false (it was, until 2026-09-03 — `{job_id}/input/`
+and `run/ingest/`, both holding **raw pre-deface** T1w, were never deleted):
+
+| path | contents |
+|---|---|
+| `{job_id}/input/` | the raw upload as received — **pre-deface** |
+| `{job_id}/run/ingest/` | dcm2niix output / NIfTI passthrough — **pre-deface** |
+| `{job_id}/run/anon/` | defaced T1w |
+| `{job_id}/run/cat12/` | raw CAT12 output |
+
+`features/`, `predict/`, `report/` and `manifest.json` are tabular/report
+outputs, not imaging, and are kept so `GET /jobs/{id}` and the PDF route keep
+working after cleanup. Every deletion is checked to resolve strictly inside
+`paths.uploads_dir` first.
+
+**Retention duration**: `bag app retention-sweep --max-age-days N` (default 30)
+removes job directories older than the cutoff, including opted-in ones. Wrap it
+with `scripts/retention_sweep.sh` on a cron — it is not installed by default:
+
+```cron
+0 4 * * * /path/to/bagpipe/scripts/retention_sweep.sh >> /path/to/bagpipe/outputs/logs/retention_sweep.log 2>&1
+```
 
 ## Before trusting this in production
 
-- `container/cat12.sif` must be the SNBB-reprocessed version (see
-  CLAUDE.md Phase 4: the standalone build's CAT version differs from
-  training's CAT12.9/2577) and its §6 reproducibility test
-  (`docs/cat12_container_spec.md`) re-run against the current image before
-  each container rebuild is trusted for inference.
+- CAT12 version parity is **satisfied as of 2026-08-25**: the training cohort
+  moved to `source="cat12_v26"` (CAT12.cohort_2026_08), which is produced by
+  the same `outputs/containers/cat12.sif` the app runs. Older warnings about a
+  "CAT26.0.rc3 vs training's CAT12.9/2577" mismatch are obsolete. What is still
+  owed: re-run the §6 reproducibility test (`docs/cat12_container_spec.md`,
+  `bag preprocess repro-test`) after *any* container rebuild before trusting
+  that image for inference.
+- The promoted model must be one the app can actually serve. `FeaturesStage`
+  parses volume ROIs only (`catROI_*.xml`); `bagpipe.app.surface_atlas` is
+  wired into cohort *ingestion*, not the app pipeline. Promoting a config with
+  surface metrics (`stacked_v26_surface.yaml`) makes every upload fail with
+  `FEATURE_SCHEMA_MISMATCH` — `scripts/periodic_promote.sh` is pinned to
+  `stacked_v26.yaml` for this reason.
 - `GET /jobs/{id}` has no auth beyond the job ID itself — anyone who knows
   (or guesses) a job's UUID can read its prediction. UUIDv4 isn't
   practically guessable, so this is intentionally treated as a "possession
   of the link is the credential" model (same as e.g. a Google Docs share
   link), not a bug — but don't build anything that leaks job IDs (e.g. a
   public list of recent jobs) without revisiting this.
-- Turnstile/`max_queue_depth`/nginx `limit_req` (§ Public-abuse protection)
+- Turnstile/`max_queue_depth`/the Cloudflare rate-limit rule (§ Public-abuse protection)
   must actually be configured, not just present in code — a fresh
   `config/local.yaml` from the example ships with Turnstile unset
   (verification skipped) until you fill in real keys.
-- Single worker by design (single GPU) — a burst of uploads queues, it
-  doesn't fail; if wait times become a problem, benchmark GPU headroom
-  before raising `--workers`.
+- Single worker by design — a burst of uploads queues, it doesn't fail. CAT12
+  is CPU-bound and this box also runs the cohort reprocess at concurrency 12,
+  so check real free cores and RAM (each CAT12 worker wants ~6-12 GB) before
+  raising `--workers`, not just the core count.

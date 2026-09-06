@@ -9,8 +9,10 @@ static/print-only; this is the richer, browser-only counterpart.
 from __future__ import annotations
 
 import json
+import math
 from string import Template
 
+from bagpipe.app.landing_page import gap_band_html
 from bagpipe.app.style import BASE_CSS, BRAIN_VIEWER_CSS, FAVICON_LINK, FONTS_LINK, RESULTS_CSS
 
 # unpkg pins for the 3D-viewer ES modules — cortex-viewer.js / volume-viewer.js
@@ -36,17 +38,21 @@ $fonts_link
 $importmap
 <style>$base_css $results_css $brain_viewer_css</style></head>
 <body>
-<div class="brand"><img src="/static/logo-icon.png" alt=""><span>Bagpipe</span></div>
+<div class="results-page">
+<a class="brand" href="/"><img src="/static/logo-icon-96.png" alt=""><span>Aevantis</span></a>
 
 <div class="results-head">
   <p class="muted">Your results</p>
-  <h1>Brain Age Gap: $bag_sign$bag_value years</h1>
+  <h1>Brain Age Gap: $bag_sign$bag_value years
+    <span class="results-head__uncertainty">&plusmn;$band_mae yrs</span></h1>
   <p class="results-head__meta">Predicted brain age $predicted_age years &middot;
     scan quality $siqr_pct% ($siqr_grade)</p>
-  <div class="chips">
-    <span class="chip chip--$bag_severity">Brain-age gap
-      <strong>$bag_sign$bag_value yrs</strong></span>
-  </div>
+  $gap_band
+  <p class="results-head__caveat">For people around your predicted age ($band_label years),
+    this model's typical error is &plusmn;$band_mae years$band_fallback_note, estimated
+    from $band_n people in the model's own validation data. Error is larger for older
+    ages — a known limitation of the current model, not a problem with your scan.</p>
+  $out_of_range_note
 </div>
 
 <section aria-labelledby="brain3d-heading">
@@ -136,18 +142,10 @@ $importmap
   </div>
 </section>
 
-<script src="/static/brainmap.js"></script>
+<script type="module" src="/static/brainmap.js"></script>
+</div>
 </body></html>
 """)
-
-
-def _severity(z: float) -> str:
-    az = abs(z)
-    if az >= 2:
-        return "high"
-    if az >= 1:
-        return "mid"
-    return "low"
 
 
 def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bool) -> str:
@@ -164,6 +162,35 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
             '<p class="brain-viewers__note">Volumetric view isn\'t available for this '
             "scan — it's only kept if you opted into data retention when you uploaded.</p>"
         )
+
+    # Per-age-band accuracy caveat (see bagpipe.app.pipeline.predict._band_mae)
+    # — computed at request time from the production model's own held-out
+    # predictions, always shown alongside the headline BAG number so a lay
+    # reader doesn't mistake it for a precise measurement.
+    band = prediction.get("age_band") or {
+        "label": "n/a",
+        "n": 0,
+        "mae_corrected": float("nan"),
+        "is_fallback": True,
+    }
+    band_fallback_note = (
+        " (too few validation subjects in your exact age band — showing the "
+        "model's overall typical error instead)"
+        if band.get("is_fallback")
+        else ""
+    )
+    out_of_range_note = ""
+    if prediction.get("age_out_of_range"):
+        support = prediction.get("training_support", {})
+        out_of_range_note = (
+            '<p class="results-head__caveat results-head__caveat--warning">'
+            "<strong>Note:</strong> your predicted age falls outside this model's usual "
+            f"reporting range. Most training data is between {support.get('p5', 0):.0f} and "
+            f"{support.get('p95', 0):.0f} years old (full range "
+            f"{support.get('min', 0):.0f}-{support.get('max', 0):.0f}) — treat this result "
+            "with extra caution.</p>"
+        )
+
     return _PAGE.substitute(
         favicon_link=FAVICON_LINK,
         fonts_link=FONTS_LINK,
@@ -173,7 +200,9 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
         brain_viewer_css=BRAIN_VIEWER_CSS,
         bag_sign="+" if bag >= 0 else "",
         bag_value=f"{bag:.1f}",
-        bag_severity=_severity(bag),
+        gap_band=gap_band_html(
+            bag, 5.0 if math.isnan(band["mae_corrected"]) else band["mae_corrected"]
+        ),
         predicted_age=f"{prediction['predicted_age']:.1f}",
         siqr_pct=qc_metrics.get("siqr_pct", "n/a"),
         siqr_grade=qc_metrics.get("siqr_grade", "n/a"),
@@ -181,4 +210,9 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
         volume_unavailable_note=volume_unavailable_note,
         volume_available_attr="true" if volume_available else "false",
         job_id=job_id,
+        band_label=band["label"],
+        band_n=band["n"],
+        band_mae=f"{band['mae_corrected']:.1f}",
+        band_fallback_note=band_fallback_note,
+        out_of_range_note=out_of_range_note,
     )

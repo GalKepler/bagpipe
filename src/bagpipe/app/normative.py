@@ -10,6 +10,7 @@ a fresh upload has no chronological age to condition on.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -63,6 +64,25 @@ def fit_norms(region_columns: list[str], datasets_dir: Path | None = None) -> di
         resid = y[mask] - design[mask] @ coefs
         norms[col] = RegionNorm(coefs=coefs, resid_std=float(resid.std(ddof=1)) or 1.0)
     return norms
+
+
+@lru_cache(maxsize=8)
+def fit_norms_cached(
+    region_columns: tuple[str, ...], datasets_dir: Path | None = None
+) -> dict[str, RegionNorm]:
+    """Process-lifetime-cached `fit_norms` — ~1300 OLS fits is too expensive
+    to redo on every job, per `fit_norms`'s own docstring. Keyed on the
+    exact region-column set and `datasets_dir` (both hashable — Path
+    included), so a promoted model with a different feature spec or
+    datasets_dir gets its own cache entry rather than a stale one.
+
+    ponytail: this never actively invalidates — the only eviction path is a
+    worker process restart. Fine in practice: `datasets_dir`'s parquet
+    exports only refresh every few hours (scripts/periodic_ingest_export.sh)
+    and this cache key already changes on every model promotion, so a
+    restart is an acceptable staleness ceiling, not a silent-forever bug.
+    """
+    return fit_norms(list(region_columns), datasets_dir)
 
 
 def regional_zscores(

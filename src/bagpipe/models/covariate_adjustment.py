@@ -48,7 +48,16 @@ class TIVSexAdjustedRegressor:
     def __init__(self, base_model_fn: Callable[[], object]):
         self.base_model_fn = base_model_fn
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> TIVSexAdjustedRegressor:
+    def fit(
+        self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None
+    ) -> TIVSexAdjustedRegressor:
+        """`sample_weight`, when given, only reaches `base_model_fn()`'s
+        `.fit()` — never `RegionAdjuster` (the TIV/sex relationship being
+        removed isn't the thing a caller is trying to rebalance, e.g. against
+        an age skew). Passed through as a kwarg only when non-None so a base
+        model without `sample_weight` support (not all sklearn estimators
+        take one) isn't broken by an unused default.
+        """
         region_x, tiv, sex = X[:, :-2], X[:, -2], X[:, -1]
         medians = np.nanmedian(region_x, axis=0)
         self.region_medians_ = np.where(np.isnan(medians), 0.0, medians)
@@ -56,7 +65,10 @@ class TIVSexAdjustedRegressor:
         self.adjuster_ = RegionAdjuster().fit(region_x, tiv, sex)
         residuals = self.adjuster_.transform(region_x, tiv, sex)
         self.model_ = self.base_model_fn()
-        self.model_.fit(residuals, y)
+        if sample_weight is not None:
+            self.model_.fit(residuals, y, sample_weight=sample_weight)
+        else:
+            self.model_.fit(residuals, y)
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:

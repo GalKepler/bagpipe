@@ -43,7 +43,10 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     model_type = config["model"]["type"]
     model_params = config["model"].get("params") or {}
     base_model_fn = lambda: MODEL_TYPES[model_type](model_params)  # noqa: E731
-    model_fn = lambda: TIVSexAdjustedRegressor(base_model_fn)  # noqa: E731
+    # fold_groups unused — plain sklearn estimators have no internal CV of
+    # their own; only the stacked ensemble (stacked.py) needs the training
+    # fold's subject array. See evaluate.ModelFactory.
+    model_fn = lambda fold_groups: TIVSexAdjustedRegressor(base_model_fn)  # noqa: E731, ARG005
 
     metrics = config.get("features", {}).get("metrics", ["vol_gm"])
     atlases = config.get("features", {}).get("atlases")  # None = every atlas
@@ -55,8 +58,17 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     )
     bias_corrector = get_corrector(config.get("bias_correction", "none"))
     n_splits = config.get("n_splits", 5)
+    sample_weighting = config.get("sample_weighting", "none")
 
-    result = evaluate(model_fn, X, y, groups, n_splits=n_splits, bias_corrector=bias_corrector)
+    result = evaluate(
+        model_fn,
+        X,
+        y,
+        groups,
+        n_splits=n_splits,
+        bias_corrector=bias_corrector,
+        sample_weighting=sample_weighting,
+    )
 
     mlflow_cfg = config.get("mlflow", {})
     mlflow_dir = get_path("mlflow_dir")
@@ -69,6 +81,7 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
             {
                 "model_type": model_type,
                 "bias_correction": config.get("bias_correction", "none"),
+                "sample_weighting": sample_weighting,
                 "n_splits": n_splits,
                 "metrics": ",".join(metrics),
                 "n_regions": len(region_columns),

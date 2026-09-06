@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from bagpipe.app.pipeline.base import ErrorCode, PipelineError, StageResult
+from bagpipe.core.apptainer import apptainer_env
 from bagpipe.core.config import get_path
 
 DEFAULT_TIMEOUT_S = 90 * 60
@@ -56,6 +57,7 @@ class SegmentStage:
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_s,
+                env=apptainer_env(),
             )
         except subprocess.TimeoutExpired as e:
             raise PipelineError(

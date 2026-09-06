@@ -423,7 +423,9 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     fold_counter = count()
 
     paths, y, groups = build_image_matrix(get_path("datasets_dir"))
-    model_fn = lambda: SFCNRegressor(  # noqa: E731
+    # fold_groups unused — SFCN has no internal region-level CV. See
+    # evaluate.ModelFactory.
+    model_fn = lambda fold_groups: SFCNRegressor(  # noqa: E731, ARG005
         **model_cfg, log_dir=log_dir, fold_label=next(fold_counter)
     )
 

@@ -26,7 +26,7 @@ from bagpipe.app.pipeline.runner import run_stages
 from bagpipe.app.pipeline.segment import SegmentStage
 from bagpipe.core.config import get_path, load_config
 
-__all__ = ["BAGResult", "PipelineError", "run", "run_manifest"]
+__all__ = ["BAGResult", "PipelineError", "reconcile_stuck_jobs", "run", "run_manifest"]
 
 
 @dataclass
@@ -62,7 +62,16 @@ def run_manifest(
 
     cfg = load_config()
     _model, config, _model_id = _load_production_model(model_name)
-    metrics_spec = config.get("features", {}).get("metrics", ["vol_gm"])
+    feature_cfg = config.get("features", {})
+    metrics_spec = feature_cfg.get("metrics", ["vol_gm"])
+    # Both come from the promoted model's OWN config, never from global config:
+    # `atlases` because every surface metric exists on three surface atlases and
+    # filtering by metric alone silently pulls all three in; `datasets_dir`
+    # because the model trained against outputs/datasets_v26 while
+    # paths.datasets_dir still points at the retired pooled export. They agree
+    # today and would diverge silently.
+    atlases_spec = feature_cfg.get("atlases")
+    model_datasets_dir = Path(config["datasets_dir"]) if config.get("datasets_dir") else None
     atlas_name = cfg["app"]["atlas_name"]
 
     manifest = Manifest(
@@ -82,7 +91,10 @@ def run_manifest(
             bagpipe_version="0.1.0",
             cat12_image=str(get_path("cat12_apptainer_image")),
             model_id=model_name,
-            feature_schema_id=f"{atlas_name}__{'-'.join(sorted(metrics_spec))}",
+            feature_schema_id=(
+                f"{'-'.join(sorted(atlases_spec)) if atlases_spec else atlas_name}"
+                f"__{'-'.join(sorted(metrics_spec))}"
+            ),
         ),
     )
 
@@ -91,7 +103,11 @@ def run_manifest(
         AnonymizeStage(),
         SegmentStage(),
         QcGateStage(),
-        FeaturesStage(model_metrics=metrics_spec),
+        FeaturesStage(
+            model_metrics=metrics_spec,
+            atlases=atlases_spec,
+            datasets_dir=model_datasets_dir,
+        ),
         PredictStage(model_name=model_name),
         ReportStage(),
     ]
@@ -117,3 +133,53 @@ def run(input_path: Path, sex: str, work_dir: Path, model_name: str = "stacked")
         regional_zscores=prediction["regional_zscores"],
         n_regions_scored=len(prediction["regional_zscores"]),
     )
+
+
+def reconcile_stuck_jobs(uploads_dir: Path) -> dict:
+    """Startup reconciliation for the worker (`bag app worker`, cli.py).
+
+    Durable job state is only `run/manifest.json` (docs/design_inference_pipeline.md
+    § "manifest is sole source of truth"), and nothing marks a job failed if
+    the worker process dies mid-job — the manifest just stops at `status ==
+    "running"` forever, and the user's browser polls `GET /jobs/{job_id}`
+    indefinitely. This is deliberately simple startup-scan reconciliation,
+    not a heartbeat/liveness system: on worker startup, any job still
+    "running" from a previous (necessarily dead, since only one worker
+    process holds the huey consumer) process gets marked failed with a
+    clear `user_message` so the client stops polling.
+
+    Returns a summary dict (`{"scanned": int, "reconciled": int,
+    "job_ids": list[str]}`) for the caller to log.
+    """
+    from bagpipe.app.pipeline.base import ErrorCode
+    from bagpipe.app.pipeline.models import ManifestError
+    from bagpipe.app.pipeline.runner import _write_manifest
+
+    scanned = 0
+    reconciled: list[str] = []
+    for manifest_path in sorted(uploads_dir.glob("*/run/manifest.json")):
+        scanned += 1
+        try:
+            manifest = Manifest.model_validate_json(manifest_path.read_text())
+        except (OSError, ValueError):
+            # Corrupt/partial manifest.json (e.g. worker died mid-write,
+            # though _write_manifest is atomic so this should be rare) —
+            # not this function's job to repair, skip it.
+            continue
+
+        if manifest.status != "running":
+            continue
+
+        manifest.status = "failed"
+        manifest.error = ManifestError(
+            stage="worker",
+            code=ErrorCode.INTERNAL.value,
+            message="worker process restarted while this job was running",
+            user_message=(
+                "Processing was interrupted by a server restart. Please upload your scan again."
+            ),
+        )
+        _write_manifest(manifest_path.parent, manifest)
+        reconciled.append(manifest.job_id)
+
+    return {"scanned": scanned, "reconciled": len(reconciled), "job_ids": reconciled}

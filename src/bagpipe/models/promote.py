@@ -9,16 +9,75 @@ import json
 from pathlib import Path
 
 import cloudpickle
+import numpy as np
+import pandas as pd
 
 from bagpipe.core.config import get_path
 from bagpipe.db.base import get_session, init_db
 from bagpipe.db.models import ModelRegistry, Prediction
 from bagpipe.models.bias_correction import fit_region_correctors
+from bagpipe.models.compare import paired_bootstrap
+from bagpipe.models.evaluate import EvalResult
 from bagpipe.models.tabular import build_region_matrix
 
 RUNNERS = {
     "stacked": "bagpipe.models.stacked",
 }
+
+
+class PromotionRejected(RuntimeError):
+    """A challenger's `mae_corrected` isn't confidently better than the
+    current production model's — see `promote(..., force=True)` to override."""
+
+
+def _incumbent_eval_result(model_name: str) -> tuple[EvalResult, np.ndarray] | None:
+    """The current production model's own stored `predictions` rows,
+    reshaped into the same `(EvalResult, groups)` shape `paired_bootstrap`
+    expects — so a challenger compares against real held-out numbers, not a
+    re-run. Returns `None` if there is no production model yet (first
+    promotion ever) or somehow no stored predictions for it."""
+    with get_session() as session:
+        incumbent = (
+            session.query(ModelRegistry)
+            .filter_by(name=model_name, stage="production")
+            .order_by(ModelRegistry.trained_at.desc())
+            .first()
+        )
+        if incumbent is None:
+            return None
+        rows = session.query(Prediction).filter_by(model_id=incumbent.model_id).all()
+    if not rows:
+        return None
+    predictions = pd.DataFrame(
+        {
+            "repeat": 0,
+            "fold": [r.fold for r in rows],
+            "index": range(len(rows)),
+            "y_true": [r.age_true for r in rows],
+            "y_pred_raw": [r.predicted_age_raw for r in rows],
+            "y_pred_corrected": [r.predicted_age_corrected for r in rows],
+        }
+    )
+    groups = np.array([r.subject_key for r in rows])
+    return EvalResult(predictions=predictions, metrics={}), groups
+
+
+def _check_promotable(
+    result: EvalResult,
+    groups: np.ndarray,
+    incumbent: tuple[EvalResult, np.ndarray] | None,
+    metric: str = "mae_corrected",
+) -> tuple[float, float, float] | None:
+    """Pure decision logic (no DB access) — `promote()`'s thin wrapper around
+    this does the DB lookups and raises `PromotionRejected`. Returns `None`
+    when there's nothing to compare against (first-ever promotion). Returns
+    `(delta, lo, hi)` from `paired_bootstrap` otherwise; caller decides what
+    to do with it — kept separate so it's unit-testable without a DB.
+    """
+    if incumbent is None:
+        return None
+    result_b, groups_b = incumbent
+    return paired_bootstrap(result, result_b, groups, groups_b, metric=metric)
 
 
 def _persist_predictions(model_id: int, result, groups, session_ids) -> None:
@@ -47,7 +106,13 @@ def _persist_predictions(model_id: int, result, groups, session_ids) -> None:
         session.commit()
 
 
-def promote(model_name: str, config_path: Path, version: str, stage: str = "production") -> ModelRegistry:
+def promote(
+    model_name: str,
+    config_path: Path,
+    version: str,
+    stage: str = "production",
+    force: bool = False,
+) -> ModelRegistry:
     if model_name not in RUNNERS:
         raise ValueError(f"unknown model {model_name!r}, choose from {list(RUNNERS)}")
 
@@ -56,15 +121,32 @@ def promote(model_name: str, config_path: Path, version: str, stage: str = "prod
     runner = importlib.import_module(RUNNERS[model_name])
     result, info = runner.run(config_path)
 
+    if stage == "production" and not force:
+        comparison = _check_promotable(result, info["groups"], _incumbent_eval_result(model_name))
+        if comparison is not None:
+            delta, lo, hi = comparison
+            # delta = challenger - incumbent MAE; delta<0 means the
+            # challenger is better. Refuse unless the CI confidently shows
+            # that (hi < 0) — "includes 0" (no confident difference) and
+            # "clearly worse" both refuse, same escape hatch either way.
+            if hi >= 0:
+                raise PromotionRejected(
+                    f"challenger mae_corrected - incumbent = {delta:+.3f}y "
+                    f"[{lo:+.3f}, {hi:+.3f}] — CI doesn't confidently exclude "
+                    "0/positive (challenger not shown better). Re-run with "
+                    "force=True to promote anyway."
+                )
+            print(f"challenger beats incumbent by {-delta:.3f}y [{-hi:.3f}, {-lo:.3f}], promoting")
+
     config = info["config"]
     feature_cfg = config.get("features", {})
     datasets_dir = (
         Path(config["datasets_dir"]) if config.get("datasets_dir") else get_path("datasets_dir")
     )
-    X, y, _groups, _region_columns, _session_ids = build_region_matrix(
+    X, y, groups, _region_columns, _session_ids = build_region_matrix(
         datasets_dir, metrics=feature_cfg.get("metrics"), atlases=feature_cfg.get("atlases")
     )
-    final_model = info["model_fn"]()
+    final_model = info["model_fn"](groups)
     final_model.fit(X, y)
     fit_region_correctors(final_model, X, y)  # per-region Cole correction, stored on the artifact
 

@@ -1,7 +1,13 @@
-"""Shared CSS for the public-facing pages (`upload_page.py`, `report.py`) —
-one palette/type/animation set so the upload flow and the emailed report
-read as the same product. Plain CSS custom properties + `<style>`, no
+"""Shared CSS for the public-facing pages (`landing_page.py`, `results_page.py`,
+`report.py`) — one palette/type/animation set so the whole site and the emailed
+report read as the same product. Plain CSS custom properties + `<style>`, no
 templating/build step (same "stdlib first" reasoning as the rest of `app/`).
+
+Tokens follow `docs/design-brief.md` §3/§4 — dark, warm-green ground, near-
+monochrome UI, color reserved for reported data only (never decoration).
+`static/js/brand-tokens.js` mirrors the same seven hexes for the WebGL viewers
+(CSS custom properties aren't readable from three.js/NiiVue uniforms) — this
+file is the source of truth; keep both in sync by hand.
 """
 
 from __future__ import annotations
@@ -9,8 +15,10 @@ from __future__ import annotations
 FONTS_LINK = (
     '<link rel="preconnect" href="https://fonts.googleapis.com">'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-    '<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@500;600;700'
-    '&family=Noto+Sans:wght@400;500;600&display=swap" rel="stylesheet">'
+    '<link href="https://fonts.googleapis.com/css2'
+    "?family=Instrument+Sans:wght@300;400;500;600"
+    "&family=Geist+Mono:wght@400;500"
+    '&display=swap" rel="stylesheet">'
 )
 
 FAVICON_LINK = '<link rel="icon" type="image/x-icon" href="/static/favicon.ico">'
@@ -18,21 +26,20 @@ FAVICON_LINK = '<link rel="icon" type="image/x-icon" href="/static/favicon.ico">
 _SELECT_ARROW_SVG = (
     "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' "
     "viewBox='0 0 20 20'%3E%3Cpath d='M5.5 7.5l4.5 4.5 4.5-4.5' "
-    "stroke='%23134E4A' stroke-width='1.5' fill='none' "
+    "stroke='%23E8E6DF' stroke-width='1.5' fill='none' "
     "stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
 )
 
 _BASE_CSS_TEMPLATE = """
 :root {
-  --color-primary: #0891B2;
-  --color-secondary: #22D3EE;
-  --color-accent: #16A34A;
-  --color-background: #F0FDFA;
-  --color-foreground: #134E4A;
-  --color-muted: #E8F1F6;
-  --color-border: #CCFBF1;
-  --color-destructive: #DC2626;
-  --color-surface: #FFFFFF;
+  --ground: #0B0F0E;
+  --surface: #141A18;
+  --line: #232B28;
+  --bone: #E8E6DF;
+  --muted: #8A928E;
+  --warm: #E0873A;   /* data only — positive gap, "older" */
+  --cool: #3FA89A;    /* data only — negative gap, "younger" */
+  --destructive: #E0653A;
 }
 
 * { box-sizing: border-box; }
@@ -40,53 +47,58 @@ _BASE_CSS_TEMPLATE = """
 html { overflow-x: hidden; }
 
 body {
-  font-family: 'Noto Sans', sans-serif;
-  color: var(--color-foreground);
-  background: var(--color-background);
-  max-width: 34em;
-  margin: 3em auto;
-  padding: 0 1.25em;
+  font-family: 'Instrument Sans', sans-serif;
+  color: var(--bone);
+  background: var(--ground);
   line-height: 1.5;
   font-size: 16px;
   overflow-x: hidden;
+  font-variant-numeric: tabular-nums;
 }
+
+.prose { max-width: 34em; margin: 3em auto; padding: 0 1.25em; }
 
 input[type="file"] { min-width: 0; }
 
 h1, h2 {
-  font-family: 'Figtree', sans-serif;
-  font-weight: 700;
+  font-family: 'Instrument Sans', sans-serif;
+  font-weight: 300;
+  letter-spacing: -0.02em;
 }
 
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 0.6em;
-  margin-bottom: 1.5em;
+.eyebrow {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.75em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
-.brand img { height: 2.5em; width: 2.5em; }
-.brand span {
-  font-family: 'Figtree', sans-serif;
-  font-weight: 700;
-  font-size: 1.3em;
-}
+
+.mono { font-family: 'Geist Mono', monospace; }
+
+.brand { display: flex; align-items: center; gap: 0.6em; text-decoration: none;
+  color: var(--bone); }
+.brand img { height: 2em; width: 2em; }
+.brand span { font-family: 'Instrument Sans', sans-serif; font-weight: 500; font-size: 1.15em; }
 
 .card {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 0.75em;
   padding: 1.5em;
 }
 
-label { display: block; margin-top: 1.1em; font-weight: 600; font-family: 'Figtree', sans-serif; }
+label { display: block; margin-top: 1.1em; font-weight: 500; }
 input, select {
   font-size: 1em;
+  font-family: inherit;
   padding: 0.5em;
   margin-top: 0.3em;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--line);
   border-radius: 0.4em;
-  background: var(--color-surface);
-  color: var(--color-foreground);
+  background: var(--ground);
+  color: var(--bone);
   width: 100%;
   max-width: 100%;
 }
@@ -99,51 +111,61 @@ select {
   background-position: right 0.6em center;
   background-size: 1.1em;
 }
-input:focus, select:focus, button:focus-visible {
-  outline: 3px solid var(--color-secondary);
-  outline-offset: 1px;
+input:focus, select:focus, button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--bone);
+  outline-offset: 2px;
 }
 input[type="checkbox"] { width: auto; }
+
+a { color: var(--bone); }
 
 button {
   margin-top: 1.5em;
   font-size: 1em;
-  font-family: 'Figtree', sans-serif;
-  font-weight: 600;
+  font-family: 'Instrument Sans', sans-serif;
+  font-weight: 500;
   padding: 0.7em 1.6em;
   min-height: 44px;
-  border: none;
-  border-radius: 0.5em;
-  background: var(--color-primary);
-  color: #FFFFFF;
+  border: 1px solid var(--bone);
+  border-radius: 8px;
+  background: var(--bone);
+  color: var(--ground);
   cursor: pointer;
-  transition: background-color 200ms ease, transform 150ms ease;
+  transition: opacity 200ms ease, transform 150ms ease;
 }
-button:hover:not(:disabled) { background: #067387; }
+button:hover:not(:disabled) { opacity: 0.85; }
 button:active:not(:disabled) { transform: scale(0.98); }
-button:disabled { background: var(--color-muted); color: #7C9A9A; cursor: not-allowed; }
+button:disabled { background: var(--line); border-color: var(--line); color: var(--muted);
+  cursor: not-allowed; }
 
-.muted { color: #4B7373; font-size: 0.9em; }
+.button--secondary {
+  background: transparent;
+  color: var(--bone);
+  border: 1px solid var(--line);
+}
+.button--secondary:hover:not(:disabled) { border-color: var(--bone); opacity: 1; }
+
+.muted { color: var(--muted); font-size: 0.9em; }
 
 #status {
   margin-top: 1.5em;
   padding: 1em;
   border-radius: 0.5em;
   display: none;
+  border: 1px solid var(--line);
 }
 #status.visible { display: block; animation: fade-in 250ms ease; }
-#status a { color: var(--color-primary); font-weight: 600; }
+#status a { color: var(--bone); font-weight: 500; text-decoration: underline; }
 #status.state-uploading, #status.state-queued, #status.state-processing {
-  background: var(--color-muted);
-}
-#status.state-succeeded { background: #DCFCE7; color: #14532D; }
-#status.state-failed { background: #FEE2E2; color: #7F1D1D; }
+  background: var(--surface); }
+#status.state-succeeded { background: var(--surface); border-color: var(--cool); }
+#status.state-failed { background: var(--surface); border-color: var(--destructive); }
 
 .spinner {
   display: inline-block;
   width: 1em;
   height: 1em;
-  border: 2px solid rgba(0,0,0,0.15);
+  border: 2px solid rgba(232,230,223,0.2);
   border-top-color: currentColor;
   border-radius: 50%;
   margin-right: 0.5em;
@@ -151,7 +173,7 @@ button:disabled { background: var(--color-muted); color: #7C9A9A; cursor: not-al
   animation: spin 800ms linear infinite;
 }
 
-.big { font-size: 1.8em; font-weight: 700; font-family: 'Figtree', sans-serif; }
+.big { font-size: 1.8em; font-weight: 400; font-family: 'Geist Mono', monospace; }
 
 .steps { list-style: none; margin: 1em 0 0; padding: 0; display: grid; gap: 0.5em; }
 .step { display: flex; align-items: center; gap: 0.6em; font-size: 0.9em; }
@@ -165,20 +187,89 @@ button:disabled { background: var(--color-muted); color: #7C9A9A; cursor: not-al
   justify-content: center;
   font-size: 0.75em;
   font-weight: 700;
-  border: 2px solid var(--color-border);
+  border: 2px solid var(--line);
   color: transparent;
 }
-.step--done .step__icon { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
-.step--done .step__icon::after { content: "✓"; }
-.step--current .step__icon { border-color: var(--color-primary); }
-.step--current .step__label { font-weight: 700; }
-.step--failed .step__icon { background: var(--color-destructive); border-color: var(--color-destructive); color: #fff; }
+.step--done .step__icon { background: var(--bone); border-color: var(--bone);
+  color: var(--ground); }
+.step--done .step__icon::after { content: "\\2713"; }
+.step--current .step__icon { border-color: var(--bone); }
+.step--current .step__label { font-weight: 600; }
+.step--failed .step__icon { background: var(--destructive); border-color: var(--destructive);
+  color: var(--ground); }
 .step--failed .step__icon::after { content: "!"; }
-.step__label { color: #4B7373; }
-.step--current .step__label, .step--done .step__label, .step--failed .step__label { color: var(--color-foreground); }
+.step__label { color: var(--muted); }
+.step--current .step__label, .step--done .step__label, .step--failed .step__label {
+  color: var(--bone); }
 
 table { border-collapse: collapse; width: 100%; margin-top: 1em; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--color-border); }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line);
+  font-family: 'Geist Mono', monospace; font-size: 0.9em; }
+th { color: var(--muted); font-weight: 500; }
+
+/* The gap band — docs/design-brief.md §6b. A brain age gap is never shown as
+   a bare number: a horizontal interval centered on the estimate, plotted
+   against a marked zero line, so it's immediately visible whether the
+   interval crosses zero. Used on the landing page, the results page, and
+   the PDF report — the one way this product ever displays a BAG. */
+.gap-band {
+  --gap-range: 15;       /* years spanned edge-to-edge */
+  position: relative;
+  width: 100%;
+  max-width: 22em;
+  height: 2.4em;
+  margin-top: 0.6em;
+}
+.gap-band__track {
+  position: absolute;
+  top: 1.1em;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--line);
+}
+.gap-band__zero {
+  position: absolute;
+  top: 0.5em;
+  left: 50%;
+  width: 1px;
+  height: 1.2em;
+  background: var(--muted);
+}
+.gap-band__interval {
+  position: absolute;
+  top: 0.95em;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--cool);
+}
+.gap-band--positive .gap-band__interval { background: var(--warm); }
+.gap-band__point {
+  position: absolute;
+  top: 0.7em;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bone);
+  transform: translateX(-50%);
+}
+.gap-band__label {
+  position: absolute;
+  top: -0.3em;
+  transform: translateX(-50%);
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.gap-band__zero-label {
+  position: absolute;
+  top: 1.6em;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.7em;
+  color: var(--muted);
+}
 
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(4px); }
@@ -188,7 +279,7 @@ th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--colo
 
 @media (prefers-reduced-motion: reduce) {
   #status.visible { animation: none; }
-  .spinner { animation: none; border-top-color: rgba(0,0,0,0.15); }
+  .spinner { animation: none; border-top-color: rgba(232,230,223,0.2); }
   button { transition: none; }
 }
 """
@@ -199,40 +290,40 @@ BASE_CSS = _BASE_CSS_TEMPLATE.replace("__SELECT_ARROW_SVG__", _SELECT_ARROW_SVG)
 # (brain map + region detail need a wide two-column layout), plus the
 # clickable-brain-map widget itself.
 RESULTS_CSS = """
-body { max-width: 64em; }
+.results-page { max-width: 64em; margin: 3em auto; padding: 0 1.25em; }
 
 .results-head { margin-bottom: 1.5em; }
 .results-head h1 { margin-bottom: 0.2em; }
-.results-head__meta { color: #4B7373; font-size: 0.95em; }
+.results-head__meta { color: var(--muted); font-size: 0.95em; }
 
-.chips { display: flex; flex-wrap: wrap; gap: 0.5em; margin-top: 1em; }
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4em;
-  padding: 0.4em 0.9em;
-  border-radius: 999px;
-  font-size: 0.9em;
-  font-weight: 600;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
+/* Uncertainty is deliberately NOT visually de-emphasised relative to the
+   headline number: the model's typical error is 4y for a 25-year-old and 11y
+   for a 70-year-old, so a bare "-11.5 years" reads as far more precise than
+   it is. Sized down only enough to keep the headline scannable. */
+.results-head__uncertainty {
+  font-size: 0.55em;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: 0.35em;
 }
-.chip--low { color: var(--color-foreground); }
-.chip--mid { color: #92400E; background: #FEF3C7; border-color: #FDE68A; }
-.chip--high { color: #7F1D1D; background: #FEE2E2; border-color: #FECACA; }
-
-.badge {
-  display: inline-block;
-  padding: 0.2em 0.6em;
-  border-radius: 999px;
-  font-size: 0.85em;
-  font-weight: 700;
+.results-head__caveat {
+  color: var(--muted);
+  font-size: 0.95em;
+  line-height: 1.5;
+  max-width: 60ch;
+  margin-top: 0.6em;
 }
-.badge--low { background: var(--color-muted); color: var(--color-foreground); }
-.badge--mid { background: #FEF3C7; color: #92400E; }
-.badge--high { background: #FEE2E2; color: #7F1D1D; }
+.results-head__caveat--warning {
+  color: var(--bone);
+  background: var(--surface);
+  border-left: 3px solid var(--warm);
+  padding: 0.7em 0.9em;
+  border-radius: 4px;
+}
 
-.section-heading { font-family: 'Figtree', sans-serif; font-size: 1.2em; margin: 2em 0 0.75em; }
+.section-heading { font-family: 'Instrument Sans', sans-serif; font-weight: 300;
+  font-size: 1.5em; margin: 2em 0 0.75em; }
 .section-heading-row {
   display: flex;
   flex-wrap: wrap;
@@ -241,26 +332,27 @@ body { max-width: 64em; }
   gap: 0.5em;
 }
 .section-heading-row .section-heading { margin: 2em 0 0; }
-.section-note { color: #4B7373; font-size: 0.9em; margin: 0 0 0.75em; }
+.section-note { color: var(--muted); font-size: 0.9em; margin: 0 0 0.75em; }
 
 .button-group { display: inline-flex; gap: 0.3em; flex-wrap: wrap; }
 .toggle {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  color: var(--color-foreground);
-  font-size: 0.85em;
-  font-weight: 600;
-  font-family: 'Figtree', sans-serif;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--bone);
+  font-size: 0.72em;
+  font-family: 'Geist Mono', monospace;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   padding: 0.45em 0.9em;
   border-radius: 0.4em;
   cursor: pointer;
   transition: background-color 150ms ease, border-color 150ms ease;
 }
-.toggle:hover { border-color: var(--color-primary); }
+.toggle:hover { border-color: var(--bone); }
 .toggle.is-active {
-  background: var(--color-primary);
-  border-color: var(--color-primary);
-  color: #fff;
+  background: var(--bone);
+  border-color: var(--bone);
+  color: var(--ground);
 }
 
 .brainmap { display: grid; gap: 1em; margin-bottom: 2em; }
@@ -279,24 +371,24 @@ body { max-width: 64em; }
   min-height: 1.6em;
 }
 .brainmap__legend[hidden] { display: none; }
-.brainmap__legend-note { color: #4B7373; font-size: 0.85em; margin: 0; }
+.brainmap__legend-note { color: var(--muted); font-size: 0.85em; margin: 0; }
 .legend-swatch { display: inline-flex; align-items: center; gap: 0.4em; font-size: 0.8em; }
 .legend-swatch__dot { width: 0.7em; height: 0.7em; border-radius: 999px; flex: none; }
 
 .colorbar { display: grid; gap: 0.3em; width: 100%; max-width: 28em; }
 .colorbar__row { display: flex; align-items: center; gap: 0.6em; }
-.colorbar__label { font-size: 0.78em; color: #4B7373; white-space: nowrap; }
+.colorbar__label { font-size: 0.78em; color: var(--muted); white-space: nowrap; }
 .colorbar__track {
   flex: 1;
   height: 0.6em;
   border-radius: 999px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--line);
 }
 .colorbar__ticks {
   display: flex;
   justify-content: space-between;
   font-size: 0.68em;
-  color: #4B7373;
+  color: var(--muted);
   padding: 0 0.05em;
 }
 
@@ -310,51 +402,53 @@ body { max-width: 64em; }
 .brainmap__hemi {
   flex: 1 1 0;
   min-width: 0;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 0.75em;
   padding: 0.5em;
 }
 .brainmap__hemi-label {
   margin: 0 0 0.35em;
   font-size: 0.78em;
-  font-weight: 600;
-  color: #4B7373;
+  font-weight: 500;
+  color: var(--muted);
   text-align: center;
 }
 .brainmap__hemi-svg svg { width: 100%; height: auto; display: block; }
 .brainmap__svg path {
   cursor: pointer;
-  stroke: var(--color-surface);
+  stroke: var(--surface);
   stroke-width: 1;
   transition: opacity 100ms ease;
 }
 .brainmap__svg path:hover { opacity: 0.75; }
-.brainmap__svg path.is-selected { stroke: var(--color-foreground); stroke-width: 2; }
+.brainmap__svg path.is-selected { stroke: var(--bone); stroke-width: 2; }
 
 .brainmap__detail {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--surface);
+  border: 1px solid var(--line);
   border-radius: 0.75em;
   padding: 1.25em;
   min-height: 12em;
 }
-.brainmap__detail-placeholder { color: #4B7373; font-size: 0.9em; margin: 0; }
+.brainmap__detail-placeholder { color: var(--muted); font-size: 0.9em; margin: 0; }
 .brainmap__detail-title {
-  font-family: 'Figtree', sans-serif;
+  font-family: 'Instrument Sans', sans-serif;
   font-size: 1.05em;
   margin: 0 0 0.5em;
 }
-.brainmap__detail-network { color: #4B7373; font-size: 0.85em; margin: 0 0 0.75em; }
+.brainmap__detail-network { color: var(--muted); font-size: 0.85em; margin: 0 0 0.75em; }
 .zscore-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0.5em 0;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--line);
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.9em;
 }
 .zscore-row:last-child { border-bottom: none; }
-.zscore-row__label { font-weight: 600; }
+.zscore-row__label { font-weight: 500; font-family: 'Instrument Sans', sans-serif; }
 
 @media (max-width: 800px) {
   .brainmap__body { grid-template-columns: 1fr; }
@@ -362,28 +456,27 @@ body { max-width: 64em; }
 }
 """
 
-# The 3D surface (cortex-viewer.js) + volumetric (volume-viewer.js) pair —
-# its own dark sub-theme straight from docs/design-brief.md §3/§9, not the
-# light BASE_CSS palette. Keeps color meaning consistent with the brain
-# renders themselves ("a teal or amber pixel means 'this is data'") rather
-# than fighting the surrounding light page. Hex values here MUST match
-# static/js/brand-tokens.js — that file is the source of truth for the JS
-# side, this block mirrors it for CSS chrome.
+# The 3D surface (cortex-viewer.js) + volumetric (volume-viewer.js) pair now
+# shares the page-level tokens directly (both palettes are the same dark
+# system per docs/design-brief.md) — the --bv-* aliases just point at the
+# global custom properties so brand-tokens.js's hex mirror stays the only
+# duplication left, for the WebGL side where CSS vars aren't reachable.
 BRAIN_VIEWER_CSS = """
 .brain-viewers {
-  --bv-ground: #0B0F0E;
-  --bv-surface: #141A18;
-  --bv-line: #232B28;
-  --bv-bone: #E8E6DF;
-  --bv-muted: #8A928E;
-  --bv-warm: #E0873A;
-  --bv-cool: #3FA89A;
+  --bv-ground: var(--ground);
+  --bv-surface: var(--surface);
+  --bv-line: var(--line);
+  --bv-bone: var(--bone);
+  --bv-muted: var(--muted);
+  --bv-warm: var(--warm);
+  --bv-cool: var(--cool);
 
   background: var(--bv-ground);
   color: var(--bv-bone);
   border-radius: 0.75em;
   padding: 1.25em;
   margin-bottom: 2em;
+  border: 1px solid var(--bv-line);
 }
 
 .brain-viewers button:focus-visible {
@@ -400,7 +493,7 @@ BRAIN_VIEWER_CSS = """
   background: transparent;
   border: 1px solid var(--bv-line);
   color: var(--bv-muted);
-  font-family: 'Noto Sans', sans-serif;
+  font-family: 'Geist Mono', monospace;
   font-size: 0.72em;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -408,13 +501,11 @@ BRAIN_VIEWER_CSS = """
   padding: 0.5em 1em;
   border-radius: 0.4em;
   cursor: pointer;
+  margin-top: 0;
   transition: color 150ms ease, border-color 150ms ease;
 }
-/* :hover/:not(:disabled) here to out-specificity BASE_CSS's generic
-   `button:hover:not(:disabled) { background: #067387 }` (light-theme
-   cyan) — without it that rule wins on hover and the dark panel's own
-   buttons flash light-theme colors under the cursor. */
-.brain-viewers__tab:hover:not(:disabled) { color: var(--bv-bone); background: transparent; }
+.brain-viewers__tab:hover:not(:disabled) { color: var(--bv-bone); background: transparent;
+  opacity: 1; }
 .brain-viewers__tab.is-active {
   color: var(--bv-ground);
   background: var(--bv-bone);
@@ -444,7 +535,7 @@ BRAIN_VIEWER_CSS = """
   align-items: center;
   gap: 1.25em;
   margin-top: 0.9em;
-  font-family: 'Noto Sans', sans-serif;
+  font-family: 'Geist Mono', monospace;
   font-size: 0.78em;
 }
 
@@ -453,6 +544,7 @@ BRAIN_VIEWER_CSS = """
   background: var(--bv-surface);
   border: 1px solid var(--bv-line);
   color: var(--bv-muted);
+  font-family: 'Geist Mono', monospace;
   font-size: 0.72em;
   font-weight: 500;
   letter-spacing: 0.06em;
@@ -460,12 +552,14 @@ BRAIN_VIEWER_CSS = """
   padding: 0.4em 0.8em;
   border-radius: 0.35em;
   cursor: pointer;
+  margin-top: 0;
   transition: color 150ms ease, border-color 150ms ease;
 }
 .bv-toggle:hover:not(:disabled) {
   color: var(--bv-bone);
   border-color: var(--bv-muted);
   background: var(--bv-surface);
+  opacity: 1;
 }
 .bv-toggle.is-active {
   color: var(--bv-ground);
@@ -484,6 +578,7 @@ BRAIN_VIEWER_CSS = """
   height: 2px;
   background: var(--bv-line);
   border-radius: 999px;
+  margin-top: 0;
 }
 .bv-slider-row input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
@@ -506,7 +601,7 @@ BRAIN_VIEWER_CSS = """
   position: absolute;
   top: 0.75em;
   left: 0.9em;
-  font-family: 'Noto Sans', sans-serif;
+  font-family: 'Geist Mono', monospace;
   font-size: 0.72em;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -523,5 +618,137 @@ BRAIN_VIEWER_CSS = """
 
 @media (max-width: 800px) {
   .brain-viewers__stage { height: 22em; }
+}
+"""
+
+# The landing page's own layout — split-viewport scrollytelling (design-brief
+# §5): brain pinned sticky right, content scrolls past on the left; collapses
+# to a sticky top-third brain + stacked content on mobile. Sections use
+# hairline rules rather than cards, per the brief's near-monochrome discipline.
+LANDING_CSS = """
+.landing { max-width: 100%; }
+.landing__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44vw;
+  align-items: start;
+}
+.landing__brain {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  border-left: 1px solid var(--line);
+}
+.landing__content { padding: 0 6vw; }
+
+.landing__nav {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1em 6vw;
+  background: linear-gradient(var(--ground), rgba(11,15,14,0));
+  pointer-events: none;
+}
+.landing__nav > * { pointer-events: auto; }
+.landing__nav-links { display: flex; gap: 1.5em; font-family: 'Geist Mono', monospace;
+  font-size: 0.8em; }
+.landing__nav-links a { text-decoration: none; color: var(--muted); }
+.landing__nav-links a:hover { color: var(--bone); }
+
+section.landing__section {
+  padding: 160px 0;
+  border-top: 1px solid var(--line);
+  max-width: 64ch;
+}
+section.landing__section:first-of-type { border-top: none; }
+.landing__section--wide { max-width: none; }
+
+.landing__hero { padding-top: 30vh; border-top: none; }
+.landing__hero h1 { font-size: clamp(2.4em, 6vw, 5.5em); margin: 0.3em 0; }
+.landing__hero p { font-size: 1.15em; color: var(--muted); max-width: 34ch; }
+.landing__cta-row { display: flex; gap: 1em; flex-wrap: wrap; margin-top: 1.5em; }
+
+.landing__section h2 { font-size: 2em; margin-bottom: 0.6em; }
+.landing__section p { color: var(--muted); font-size: 1.05em; }
+.landing__section p + p { margin-top: 1em; }
+
+.landing__gap-pair { display: flex; gap: 3em; flex-wrap: wrap; margin-top: 2em; }
+.landing__gap-item { flex: 1 1 12em; }
+.landing__gap-item .eyebrow { display: block; margin-bottom: 0.5em; }
+
+.landing__items { display: grid; gap: 2em; margin-top: 1.5em; }
+.landing__item .eyebrow { display: block; margin-bottom: 0.3em; }
+.landing__item h3 { font-weight: 400; margin: 0 0 0.3em; }
+
+.landing__accuracy-table { width: 100%; margin-top: 1.5em; }
+.landing__accuracy-table th, .landing__accuracy-table td { text-align: center; }
+.landing__accuracy-table td:first-child, .landing__accuracy-table th:first-child {
+  text-align: left; }
+
+.landing__people { display: grid; gap: 2.5em; margin-top: 2em;
+  grid-template-columns: repeat(auto-fit, minmax(14em, 1fr)); }
+.landing__person h3 { font-weight: 400; margin: 0 0 0.15em; }
+.landing__person .eyebrow { display: block; margin-bottom: 0.6em; }
+.landing__person p { font-size: 0.95em; }
+.landing__person a { color: var(--bone); font-size: 0.85em; font-family: 'Geist Mono', monospace; }
+
+.dropzone {
+  position: relative;
+  border: 1px dashed var(--line);
+  border-radius: 0.5em;
+  padding: 1.5em;
+  text-align: center;
+  background: var(--ground);
+}
+.dropzone input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.dropzone label {
+  margin: 0;
+  color: var(--muted);
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.85em;
+  pointer-events: none;
+}
+.dropzone.is-dragover { border-color: var(--bone); }
+
+.landing__notice {
+  margin-top: 1.5em;
+  padding: 1em 1.25em;
+  border: 1px solid var(--line);
+  border-radius: 0.5em;
+  font-size: 0.9em;
+  color: var(--muted);
+}
+
+.landing__footer {
+  padding: 96px 0 3em;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.85em;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1em;
+}
+.landing__footer a { color: var(--muted); }
+.landing__footer a:hover { color: var(--bone); }
+
+@media (max-width: 900px) {
+  .landing__grid { grid-template-columns: 1fr; }
+  .landing__brain { position: sticky; top: 0; height: 34vh; border-left: none;
+    border-bottom: 1px solid var(--line); order: -1; }
+  .landing__content { padding: 0 5vw; }
+  section.landing__section { padding: 96px 0; max-width: none; }
+  .landing__hero { padding-top: 10vh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing__nav { position: absolute; }
 }
 """

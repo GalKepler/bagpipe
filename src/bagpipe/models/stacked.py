@@ -14,6 +14,7 @@ import yaml
 from regional_stacker import RegionalStackingRegressor, default_alpha_grid
 from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge, RidgeCV
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import PolynomialFeatures
 
@@ -40,7 +41,35 @@ ESTIMATOR_TYPES = {
 def _build_estimator(spec: dict) -> object:
     spec = dict(spec)
     estimator_type = spec.pop("type")
-    return ESTIMATOR_TYPES[estimator_type](spec.pop("params", {}))
+    # dict(...) copy of "params" — ESTIMATOR_TYPES lambdas `.pop("alphas", ...)`
+    # off it; without this copy that pop mutates the caller's config dict, and
+    # since stacker_fn() is called fresh per CV fold, a config-set `alphas`
+    # would apply on fold 0 only and silently vanish afterward.
+    return ESTIMATOR_TYPES[estimator_type](dict(spec.pop("params", {})))
+
+
+def _grouped_outer_cv(
+    fold_groups: np.ndarray, n_splits: int
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """A materialized, subject-grouped split for `RegionalStackingRegressor`'s
+    internal OOF stage.
+
+    `RegionalStackingRegressor.outer_cv` goes through sklearn's `check_cv`,
+    which — given a plain int — builds a non-grouped `KFold`. Since a
+    subject's repeated sessions can land in the same `fold_groups` array
+    passed in here (real for the SNBB cohort: ~330 subjects have >1
+    session), that split would put one subject's sessions on both sides of
+    the stacker's own internal train/val boundary, optimistically biasing
+    the OOF predictions the meta-learner is fit on. `check_cv` accepts a
+    precomputed iterable of `(train_idx, val_idx)` pairs as-is (wrapped in
+    `_CVIterableWrapper`), so we build one with `GroupKFold` instead and
+    pass that — same index space regardless of which region's `X` slice
+    the stacker applies it to, so this only needs to be computed once per
+    outer bagpipe fold, not once per region.
+    """
+    n_splits = min(n_splits, len(np.unique(fold_groups)))
+    dummy_X = np.zeros((len(fold_groups), 1))
+    return list(GroupKFold(n_splits=n_splits).split(dummy_X, groups=fold_groups))
 
 
 def region_importance(fitted_model: TIVSexAdjustedRegressor) -> dict[str, float]:
@@ -74,23 +103,39 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
     )
     region_mapping = build_region_mapping(region_columns)
 
-    def stacker_fn():
+    def stacker_fn(fold_groups: np.ndarray):
+        outer_cv = _grouped_outer_cv(fold_groups, stacker_cfg.get("outer_cv", 5))
         return RegionalStackingRegressor(
             region_mapping=region_mapping,
             base_estimator=_build_estimator(stacker_cfg["base_estimator"]),
             meta_estimator=_build_estimator(stacker_cfg["meta_estimator"]),
-            outer_cv=stacker_cfg.get("outer_cv", 5),
+            outer_cv=outer_cv,
             inner_cv=stacker_cfg.get("inner_cv", 3),
             n_jobs=stacker_cfg.get("n_jobs", -1),
             random_state=stacker_cfg.get("random_state", 0),
         )
 
-    model_fn = lambda: TIVSexAdjustedRegressor(stacker_fn)  # noqa: E731
+    # fold_groups is the outer bagpipe CV fold's own training-subject array
+    # (see evaluate.ModelFactory) — captured by the inner lambda so
+    # TIVSexAdjustedRegressor's `base_model_fn()` (called with no args, at
+    # `.fit()` time) still builds a stacker keyed to the right fold.
+    model_fn = lambda fold_groups: TIVSexAdjustedRegressor(  # noqa: E731
+        lambda: stacker_fn(fold_groups)
+    )
 
     bias_corrector = get_corrector(config.get("bias_correction", "none"))
     n_splits = config.get("n_splits", 5)
+    sample_weighting = config.get("sample_weighting", "none")
 
-    result = evaluate(model_fn, X, y, groups, n_splits=n_splits, bias_corrector=bias_corrector)
+    result = evaluate(
+        model_fn,
+        X,
+        y,
+        groups,
+        n_splits=n_splits,
+        bias_corrector=bias_corrector,
+        sample_weighting=sample_weighting,
+    )
 
     mlflow_cfg = config.get("mlflow", {})
     mlflow_dir = get_path("mlflow_dir")
@@ -103,6 +148,7 @@ def run(config_path: Path) -> tuple[EvalResult, dict]:
             {
                 "model_type": "stacked",
                 "bias_correction": config.get("bias_correction", "none"),
+                "sample_weighting": sample_weighting,
                 "n_splits": n_splits,
                 "metrics": ",".join(metrics) if metrics else "all",
                 "atlases": ",".join(atlases) if atlases else "all",

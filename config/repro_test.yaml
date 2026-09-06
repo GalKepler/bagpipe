@@ -3,6 +3,6 @@
 
 n_stratified: 12   # sampled across age tertile x sex
 n_stress: 2        # additional lowest-IQR subjects in the cohort
-concurrency: 3     # concurrent apptainer runs (~4 cores/6-12GB RAM each, see §7)
+concurrency: 1     # matches production reality: single worker, one job at a time. Set to 3 originally for throughput on an idle box; lowered 2026-09-03 after pydeface hit its 900s timeout running 3-concurrent on top of the cohort reprocess (load 28-60) — self-inflicted contention repro-test doesnt need to add.
 model_name: stacked
 work_dir: /media/storage/bagpipe/outputs/repro_test   # per-subject job workspaces, kept for inspection

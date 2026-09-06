@@ -19,8 +19,24 @@ from bagpipe.models.tabular import region_columns_for
 class FeaturesStage:
     name = "extract_features"
 
-    def __init__(self, model_metrics: list[str]):
+    def __init__(
+        self,
+        model_metrics: list[str],
+        atlases: list[str] | None = None,
+        datasets_dir: Path | None = None,
+    ):
+        """`atlases`/`datasets_dir` should come from the same production
+        model config `predict.py` reads (`config["features"]["atlases"]`,
+        `config["datasets_dir"]`) — see `region_columns_for`'s own atlases
+        filter (bagpipe.models.tabular). Defaulting to None (all atlases,
+        `get_path("datasets_dir")`) keeps this back-compatible with the
+        current volume-only production model, where it makes no difference
+        (see CLAUDE.md's Agent SCI report for why this matters the moment a
+        surface model is promoted).
+        """
         self.model_metrics = model_metrics
+        self.atlases = atlases
+        self.datasets_dir = datasets_dir
 
     def run(self, workspace: Path, manifest) -> StageResult:  # noqa: ARG002
         cfg = load_config()
@@ -38,7 +54,9 @@ class FeaturesStage:
             catroi_xml, cat_xml, atlas_name, atlas_key, lut, self.model_metrics
         )
 
-        region_columns = region_columns_for(self.model_metrics)
+        region_columns = region_columns_for(
+            self.model_metrics, datasets_dir=self.datasets_dir, atlases=self.atlases
+        )
         missing = [c for c in region_columns if c not in features]
         if missing:
             raise PipelineError(

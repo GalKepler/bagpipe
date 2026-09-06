@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from bagpipe.models.bias_correction import get_corrector  # noqa: E402
 from bagpipe.models.covariate_adjustment import TIVSexAdjustedRegressor  # noqa: E402
 from bagpipe.models.evaluate import evaluate  # noqa: E402
+from bagpipe.models.stacked import _grouped_outer_cv  # noqa: E402
 from bagpipe.models.tabular import build_region_mapping, build_region_matrix  # noqa: E402
 
 DATASETS_DIR = Path("outputs/datasets_v26")
@@ -77,17 +78,21 @@ ESTIMATOR_VARIANTS = {
 
 
 def _stacked_model_fn(region_mapping, base_fn, meta_fn):
-    def build():
-        stacker = RegionalStackingRegressor(
-            region_mapping=region_mapping,
-            base_estimator=base_fn(),
-            meta_estimator=meta_fn(),
-            outer_cv=5,
-            inner_cv=3,
-            n_jobs=-1,
-            random_state=0,
-        )
-        return TIVSexAdjustedRegressor(lambda: stacker)
+    # matches stacked.py's model_fn(groups) contract — a subject-grouped
+    # split for the stacker's internal OOF stage, not a plain KFold.
+    def build(fold_groups):
+        def make_stacker():
+            return RegionalStackingRegressor(
+                region_mapping=region_mapping,
+                base_estimator=base_fn(),
+                meta_estimator=meta_fn(),
+                outer_cv=_grouped_outer_cv(fold_groups, 5),
+                inner_cv=3,
+                n_jobs=-1,
+                random_state=0,
+            )
+
+        return TIVSexAdjustedRegressor(make_stacker)
 
     return build
 

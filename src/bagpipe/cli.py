@@ -1,7 +1,62 @@
 """`bag` CLI entry point. Subcommands are added as each pillar lands."""
 
 import argparse
+import logging
+import os
+import shutil
+import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _retention_sweep(max_age_days: int) -> dict:
+    """`bag app retention-sweep` — CLAUDE.md hard constraint "real data
+    stays on this machine" plus deploy/README.md's admitted gap: opted-in
+    (retained) uploads have no deletion path at all. Deletes each job
+    directory directly under `uploads_dir` whose most-recent content
+    modification is older than `max_age_days`. Idempotent (a dir already
+    removed is simply not found again next run) and logs a summary
+    (dirs removed/skipped), per CLAUDE.md's ingestion convention.
+
+    Age is judged from the job directory's own mtime (updated by the last
+    write anywhere under it, in particular `run/manifest.json` on job
+    completion) rather than a stored "retained_at" timestamp — there isn't
+    one; the manifest doesn't record how long to keep it, only whether the
+    uploader opted in at all (docs/design_inference_pipeline.md § Job
+    manifest schema, `input.retention_opt_in`). Removes non-consenting
+    job dirs too if they're somehow still present (e.g. cleanup ran but
+    the empty shell directories were left behind) — this is a backstop,
+    not the primary consent-enforcement path (`bagpipe.app.queue._delete_imaging`
+    is that).
+    """
+    from bagpipe.core.config import get_path
+
+    uploads_dir = get_path("uploads_dir")
+    cutoff = time.time() - max_age_days * 86400
+
+    scanned = 0
+    removed = 0
+    skipped = 0
+    for job_dir in sorted(p for p in uploads_dir.iterdir() if p.is_dir()):
+        scanned += 1
+        try:
+            mtimes = (p.stat().st_mtime for p in job_dir.rglob("*"))
+            mtime = max(mtimes, default=job_dir.stat().st_mtime)
+        except OSError:
+            logger.warning("retention-sweep: could not stat %s, skipping", job_dir)
+            skipped += 1
+            continue
+
+        if mtime >= cutoff:
+            skipped += 1
+            continue
+
+        shutil.rmtree(job_dir, ignore_errors=True)
+        logger.info("retention-sweep: removed %s (age > %d days)", job_dir, max_age_days)
+        removed += 1
+
+    return {"scanned": scanned, "removed": removed, "skipped": skipped}
 
 
 def main() -> None:
@@ -81,6 +136,12 @@ def main() -> None:
     promote.add_argument("--name", required=True, choices=["stacked"], help="Registered model name")
     promote.add_argument("--config", required=True, help="Path to model config YAML")
     promote.add_argument("--version", required=True, help="Version tag, e.g. v1")
+    promote.add_argument(
+        "--force",
+        action="store_true",
+        help="Promote even if the challenger isn't confidently better than the "
+        "incumbent on mae_corrected (paired subject bootstrap CI)",
+    )
 
     app_cmd = sub.add_parser("app", help="Run the public BAG report web app")
     app_sub = app_cmd.add_subparsers(dest="app_command")
@@ -89,7 +150,20 @@ def main() -> None:
     serve.add_argument("--port", type=int, default=8000)
     worker = app_sub.add_parser("worker", help="Run the job queue worker (processes /predict jobs)")
     worker.add_argument(
-        "--workers", type=int, default=1, help="Concurrent jobs (default 1 — see design doc N_CONCURRENT)"
+        "--workers",
+        type=int,
+        default=1,
+        help="Concurrent jobs (default 1 — see design doc N_CONCURRENT)",
+    )
+    retention_sweep = app_sub.add_parser(
+        "retention-sweep",
+        help="Delete job directories under uploads_dir older than --max-age-days",
+    )
+    retention_sweep.add_argument(
+        "--max-age-days",
+        type=int,
+        default=30,
+        help="Delete job directories whose manifest is older than this many days (default 30)",
     )
 
     args = parser.parse_args()
@@ -225,7 +299,7 @@ def main() -> None:
     if args.command == "models" and args.models_command == "promote":
         from bagpipe.models.promote import promote as promote_run
 
-        entry = promote_run(args.name, args.config, version=args.version)
+        entry = promote_run(args.name, args.config, version=args.version, force=args.force)
         print(f"promoted model_id={entry.model_id} {entry.name} {entry.version} -> {entry.stage}")
         return
 
@@ -238,9 +312,53 @@ def main() -> None:
     if args.command == "app" and args.app_command == "worker":
         from huey.consumer import Consumer
 
+        from bagpipe.app.pipeline import reconcile_stuck_jobs
         from bagpipe.app.queue import huey
+        from bagpipe.core.config import get_path
 
-        Consumer(huey, workers=args.workers, worker_type="process" if args.workers > 1 else "thread").run()
+        # Preflight: the pipeline shells out to `pydeface` and `dcm2niix` by
+        # bare name, so they resolve off the worker process's PATH — which
+        # systemd builds from the unit file, NOT from a login shell. Get that
+        # PATH wrong and every job dies at the anonymize stage with a raw
+        # FileNotFoundError, one uploaded scan at a time. (Observed for real
+        # on 2026-09-03: a 14-subject repro run launched from a shell without
+        # the venv on PATH failed all 14 this way.) Fail loudly at startup
+        # instead — a worker that cannot possibly succeed should not sit there
+        # accepting jobs.
+        missing = [t for t in ("pydeface", "dcm2niix") if shutil.which(t) is None]
+        cat12_image = get_path("cat12_apptainer_image")
+        if shutil.which("apptainer") is None:
+            missing.append("apptainer")
+        if missing:
+            raise SystemExit(
+                f"worker preflight failed — not on PATH: {', '.join(missing)}. "
+                f"PATH={os.environ.get('PATH', '')}"
+            )
+        if not cat12_image.exists():
+            raise SystemExit(f"worker preflight failed — CAT12 image not found: {cat12_image}")
+        print(f"preflight ok: pydeface, dcm2niix, apptainer, {cat12_image.name}")
+
+        # Startup reconciliation: a worker that died mid-job leaves its
+        # manifest stuck at status="running" forever (nothing else marks it
+        # failed — see reconcile_stuck_jobs' docstring). Run once per worker
+        # startup, before the consumer starts pulling new jobs.
+        summary = reconcile_stuck_jobs(get_path("uploads_dir"))
+        print(
+            f"startup reconciliation: {summary['scanned']} manifest(s) scanned, "
+            f"{summary['reconciled']} stuck job(s) marked failed"
+        )
+
+        Consumer(
+            huey, workers=args.workers, worker_type="process" if args.workers > 1 else "thread"
+        ).run()
+        return
+
+    if args.command == "app" and args.app_command == "retention-sweep":
+        summary = _retention_sweep(max_age_days=args.max_age_days)
+        print(
+            f"retention sweep: {summary['scanned']} job dir(s) scanned, "
+            f"{summary['removed']} removed, {summary['skipped']} skipped"
+        )
         return
 
     parser.print_help()

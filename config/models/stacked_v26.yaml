@@ -1,7 +1,7 @@
 # bag models train-stacked --config config/models/stacked_v26.yaml
-# CAT26 reprocessing cohort only (source=cat12_v26). Volume metrics only
-# (all 426 sessions have these) — see stacked_v26_surface.yaml for the
-# thickness-inclusive variant (248/426 sessions have surface output).
+# CAT26 reprocessing cohort only (source=cat12_v26). Volume metrics only —
+# see stacked_v26_surface.yaml for the surface-inclusive variant (now ~93%
+# session coverage, not the 248/426 this comment used to say).
 #
 # base_estimator was hgbr per scripts/feature_ablation.py (2026-08-26, mae_raw
 # 4.73 vs ridgecv 6.00 at n=281) but HGBR training time is prohibitive at full

@@ -15,6 +15,8 @@ from typing import Protocol
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
+from bagpipe.models.covariate_adjustment import _fillna
+
 
 class BiasCorrector(Protocol):
     def fit(self, y_true: np.ndarray, y_pred: np.ndarray) -> BiasCorrector: ...
@@ -90,6 +92,7 @@ def fit_region_correctors(model, X: np.ndarray, y: np.ndarray) -> dict[str, Cole
     meta-learner; these correctors are for region-level analysis only.
     """
     region_x, tiv, sex = X[:, :-2], X[:, -2], X[:, -1]
+    region_x = _fillna(region_x, model.region_medians_)  # same imputation fit() uses
     residuals = model.adjuster_.transform(region_x, tiv, sex)
     stacker = model.model_
     correctors = {

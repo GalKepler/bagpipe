@@ -34,7 +34,7 @@ def test_region_adjuster_removes_tiv_sex_correlation():
 def test_tiv_sex_adjusted_regressor_fits_and_predicts():
     X, age, _, _ = _synthetic()
     groups = np.arange(len(age)) % 40  # fake subjects, no repeated sessions needed here
-    model_fn = lambda: TIVSexAdjustedRegressor(lambda: LinearRegression())  # noqa: E731
+    model_fn = lambda fold_groups: TIVSexAdjustedRegressor(lambda: LinearRegression())  # noqa: E731
     result = evaluate(model_fn, X, age, groups, n_splits=5)
     assert np.isfinite(result.metrics["mae_raw"])
     # adjusted model should beat a naive TIV/sex-blind fit by a wide margin

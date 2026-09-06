@@ -92,7 +92,7 @@ def build_region_matrix(
 
 
 def region_columns_for(
-    metrics: list[str], datasets_dir: Path | None = None, atlases: list[str] | None = None
+    metrics: list[str] | None, datasets_dir: Path | None = None, atlases: list[str] | None = None
 ) -> list[str]:
     """The `atlas__region__metric` column order `build_region_matrix` would
     produce for `metrics`/`atlases` — i.e. what a promoted model's `X`
@@ -100,12 +100,17 @@ def region_columns_for(
     time (Pillar 4) to align a single freshly-parsed session onto the
     trained column space; `pivot_table`'s columns are alphabetically
     sorted, same as here.
+
+    `metrics=None` means "every metric" — matches `build_region_matrix`'s
+    `None` semantics (was previously required here, and `.isin(None)` would
+    raise).
     """
     datasets_dir = datasets_dir or get_path("datasets_dir")
     regional = pd.read_parquet(
         datasets_dir / "regional.parquet", columns=["atlas", "region", "metric"]
     )
-    regional = regional[regional["metric"].isin(metrics)]
+    if metrics is not None:
+        regional = regional[regional["metric"].isin(metrics)]
     if atlases is not None:
         regional = regional[regional["atlas"].isin(atlases)]
     regional = regional.drop_duplicates()
@@ -137,8 +142,35 @@ def build_image_matrix(
     return paths, y, groups
 
 
+# Atlases that share one real parcellation but use different region-name
+# conventions between CAT12's native volume ROI output and
+# bagpipe.app.surface_atlas's custom surface resampling — e.g. the volume
+# atlas calls a region "LH_Cont_Cing_1", the surface atlas calls the exact
+# same region "7Networks_LH_Cont_Cing_1" (confirmed: stripping that prefix
+# makes all 400 surface region names match volume region names exactly).
+# Canonicalized so a region's volume AND its surface metrics land in ONE
+# stacked-ensemble base learner, not two independent single-modality ones
+# — the entire point of "per-region" stacking. Every other atlas keeps its
+# own atlas-qualified key: names like `surf_DK40`'s FreeSurfer labels don't
+# collide with Schaefer's, and fusing across genuinely different
+# parcellations would silently mix unrelated anatomy.
+_FUSIBLE_SCHAEFER_ATLASES = {"Schaefer2018N400n7Tian2020S2", "surf_Schaefer2018N400n7"}
+
+
+def _region_key(atlas: str, region: str) -> str:
+    if atlas in _FUSIBLE_SCHAEFER_ATLASES:
+        return region.removeprefix("7Networks_")
+    return f"{atlas}__{region}"
+
+
 def build_region_mapping(region_columns: list[str]) -> dict[str, list[int]]:
-    """Groups `region_columns` (format `atlas__region__metric`) by `atlas__region`.
+    """Groups `region_columns` (format `atlas__region__metric`) into one
+    base-learner block per anatomical region — see `_region_key`.
+
+    The 32 Tian subcortical regions (part of
+    `Schaefer2018N400n7Tian2020S2` but with no surface counterpart) still
+    end up as their own singleton groups: canonicalizing a name nothing
+    else matches is a no-op.
 
     Column indices are relative to `region_columns` only (i.e. before the
     trailing TIV/sex columns `build_region_matrix` appends) — pass straight
@@ -148,5 +180,5 @@ def build_region_mapping(region_columns: list[str]) -> dict[str, list[int]]:
     mapping: dict[str, list[int]] = {}
     for i, col in enumerate(region_columns):
         atlas, region, _metric = col.split("__", maxsplit=2)
-        mapping.setdefault(f"{atlas}__{region}", []).append(i)
+        mapping.setdefault(_region_key(atlas, region), []).append(i)
     return mapping

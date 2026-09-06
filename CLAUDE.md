@@ -390,6 +390,88 @@ same PR.**
       on the stored corrector — no fitting happens outside promotion.
       Same in-sample caveat as `region_estimators_` itself. New test:
       `tests/test_bias_correction.py`.*
+
+      *Update (2026-09-06): accuracy-improvement pass kicked off, following
+      a real diagnostic of production model 31's own held-out `predictions`
+      (n=2260): MAE roughly triples from 3.6y @25-30 to 11.0y @70+, and Cole
+      slope 0.713 means the shipped **corrected** number amplifies every
+      deviation 1.40x — `mae_corrected` (5.75y) is the metric that matters
+      and nothing in the pipeline optimized it. Full plan and root-cause
+      analysis (surface/volume region-name mismatch causing 0 fusion,
+      untouched age skew, self-inflicted HGBR-vs-speed tradeoff) at
+      `~/.claude/plans/at-the-heart-of-whimsical-naur.md`. Phases 0-2 done:
+
+      **Phase 0 (bug fixes)**: `fit_region_correctors` was fitting per-region
+      Cole correctors on NaN-contaminated residuals — skipped the same
+      median imputation `TIVSexAdjustedRegressor.fit/predict` applies before
+      residualizing; fixed (route through `_fillna` first). `stacked.py`'s
+      `_build_estimator` did a shallow `dict(spec)` copy, so a config-set
+      `alphas` would apply on CV fold 0 only and silently vanish after
+      (dormant — no shipped config sets it yet, but Phase 3's capacity work
+      will); fixed to a real copy. `region_columns_for(metrics=None)`
+      crashed (`.isin(None)`) unlike `build_region_matrix`'s symmetric
+      `None`-means-all-metrics; fixed. Stale "2/180"/"248/426"
+      surface-coverage comments across `config/models/*.yaml` corrected —
+      coverage is now ~93% (2466/2647 v26 sessions).
+
+      **Phase 1 (harness can now answer the question)**: `evaluate()` gained
+      per-age-band MAE, `mae_balanced_{raw,corrected}` (mean of per-band
+      MAE, so the old tail counts as much as the dominant 18-40 band),
+      `mae_over_sd_raw`, and `cole_slope`. Folds are now
+      `StratifiedGroupKFold` on age decile (`_make_strata`, shrinks bin
+      count rather than the caller's requested fold count on small data) —
+      plain `GroupKFold` had no seed and no age balance. New `repeats`
+      param reruns the whole CV with different seeds. New
+      `bagpipe.models.compare.paired_bootstrap` (resamples *subjects*, not
+      rows) gives a leaderboard gap a confidence interval instead of a bare
+      point estimate. Wired into `promote()`: promoting to `stage=
+      "production"` now compares the challenger against the incumbent's own
+      stored `predictions` and raises `PromotionRejected` unless the CI on
+      `mae_corrected` confidently favors the challenger (`hi < 0`) —
+      `--force` overrides. `AGE_BANDS` moved to `bagpipe.models.evaluate`
+      (canonical home) with `bagpipe.app.pipeline.predict` now importing it
+      rather than duplicating it — models importing app would have been the
+      wrong dependency direction.
+
+      **Phase 2 (freed the compute)**: the nested bias-correction CV cost
+      `n_splits * (1 + bias_cv_splits)` model fits (30 at defaults) to get a
+      held-out estimate for the corrector. Replaced with a
+      leave-one-outer-fold-out estimator (`bias_correction_method="lofo"`,
+      now the default): fit all outer folds once, then fit fold k's
+      corrector on the pooled OOF predictions of every *other* fold — same
+      leakage guarantee (fold k's subjects are never in that pool), 1x the
+      fits. **Verified on real data** (`outputs/datasets_v26`, n=2333, 432
+      regions, `stacked_v26.yaml`'s ridgecv_interactions): lofo 226s vs
+      nested 1339s (5.9x, matches the ~6x prediction), `cole_slope` 0.7294
+      vs 0.7154 and `mae_corrected` 5.479 vs 5.574 — agree within noise.
+      `bias_correction_method="nested"` kept (not config-exposed — internal/
+      validation only) for exactly this check. Second real bug fixed in the
+      same pass: `RegionalStackingRegressor`'s own internal `outer_cv` (for
+      the meta-learner's OOF matrix) went through `check_cv` unguarded,
+      producing a **plain, non-subject-grouped** `KFold` — with ~330
+      subjects having >1 session, a subject's sessions could land on both
+      sides of the stacker's own internal split, optimistically biasing
+      what the meta-learner trains on (the outer bagpipe-level CV stayed
+      honest throughout — this was an inner-stage leak, same *class* of bug
+      as the SFCN inner-split leak fixed 2026-08-19c). Fixed via
+      `stacked._grouped_outer_cv`: precompute a `GroupKFold` split on the
+      training fold's own subject array and pass the materialized index
+      pairs as `outer_cv=` (`check_cv` accepts a precomputed iterable
+      as-is). Required changing `evaluate()`'s `model_fn` contract from
+      `model_fn()` to `model_fn(groups)` (the training fold's subject
+      array) — three call sites (`baseline.py`, `sfcn.py` ignore it;
+      `stacked.py` uses it; `promote.py`'s final refit and
+      `scripts/feature_ablation.py`'s stacker builder updated to match).
+      Full suite 129/129 passing, ruff clean (no new debt). **Not yet
+      done**: Phase 3 (region fusion — surface/volume regions currently
+      share 0 names across the two atlas naming conventions, so
+      `stacked_v26_surface` never actually fuses modalities per region;
+      sample weighting against the 18-40 age skew; spending the freed
+      compute on HGBR base learners), Phase 4 (wire surface parsing into
+      the app pipeline — currently only `db/ingest_cat12_cohort.py` has it,
+      `app/cat12_parse.py` doesn't, so no surface model can serve uploads
+      yet), Phase 5 (SFCN+stacked ensemble, promote, re-enable the
+      promote cron).*
 - [ ] **Phase 3 — Causal:** exposure mapping from questionnaire, cohort builders,
       mixed-model/DiD/event-study analyses + falsification and selection batteries.
       *Status (2026-08-19): kickoff started. `events` table added
@@ -868,6 +950,134 @@ same PR.**
       `config/models/stacked_v26_surface.yaml` for a real (not
       197-sample) leaderboard number, and reconsider promoting a v2
       production model only once that's trustworthy.*
+
+      *Update (2026-09-03): pre-launch hardening pass, targeting a public
+      deployment at **https://brainage.aevantis.app** (Cloudflare Tunnel,
+      domain registered same day). Two independent audits of the app and
+      the inference path found four critical defects, all fixed:
+
+      **(1) Arbitrary file write.** `api.py` wrote uploads to
+      `job_dir/"input"/file.filename` with the client-supplied multipart
+      filename passed through verbatim — Starlette does not sanitize it.
+      Verified: `'../../../../../../tmp/pwned.txt'` resolved outside
+      `uploads_dir`, and `mkdir(parents=True)` created the path first.
+      Unauthenticated arbitrary file write as the app user, on an endpoint
+      designed to be open to the public. Fixed: the client filename now
+      only *selects an extension* from an allowlist
+      (`.nii`/`.nii.gz`/`.zip`); bytes always land at a fixed
+      `input/upload<ext>`, so the string never reaches a path.
+
+      **(2) The retention consent was a lie.** There were two `input/`
+      dirs — `api.py` wrote the raw upload to `{job_id}/input/`, the
+      pipeline copied it to `{job_id}/run/input/`; `anonymize` deleted
+      only the latter and `_delete_imaging` only `run/anon`+`run/cat12`.
+      **Nothing ever deleted `{job_id}/input/` or `run/ingest/`, both of
+      which hold raw PRE-DEFACE T1w.** Found 5 such volumes on disk, every
+      one from a job with `retention_opt_in: false`, under filenames
+      carrying real subject IDs — while the upload page promised deletion.
+      `tests/test_queue.py` had encoded the bug as expected behavior.
+      Fixed: `_delete_imaging` now covers all four locations, guards that
+      every path resolves under `uploads_dir` before `rmtree`, and runs in
+      a `try/finally` so a `_notify` failure can no longer skip cleanup
+      (`email.build_success_email`'s unguarded `pdf_path.read_bytes()` was
+      the live path that did exactly that — now guarded too, and the mail
+      still goes out with the results link if the PDF is unreadable). The
+      5 retained scans were moved out of `uploads_dir` to
+      `outputs/dev_jobs_archive/` (not deleted — `smoketest_run/` holds a
+      complete CAT12 tree worth ~70 min of compute; delete after launch).
+
+      **(3) The promote cron was about to break every upload.**
+      `scripts/periodic_promote.sh` had been switched to
+      `stacked_v26_surface.yaml`. That model declares five surface metrics,
+      but the app's `FeaturesStage` parses `catROI_*.xml` volume tissues
+      only — `bagpipe.app.surface_atlas` is wired into
+      `db/ingest_cat12_cohort.py` and **nowhere in the app pipeline** — so
+      every job would have died at `extract_features` with
+      `FEATURE_SCHEMA_MISMATCH`. Caught before its first run (the edit
+      landed at 09:08, after that morning's 05:00 promotion, so production
+      `model_id=31` was still safely volume-only). Reverted to
+      `stacked_v26.yaml` with a comment explaining why it must stay there,
+      and **the promote cron is commented out for the launch weekend** —
+      re-enable Mon 2026-09-07. A production model that silently changes
+      under live users every morning is not a thing to debug during a
+      launch.
+
+      **(4) The model is not equally valid across the ages it accepts.**
+      Recomputed from the production model's own held-out `predictions`
+      (n=2260, 1902 subjects): MAE 4.03y @18-30, 3.95y @30-40, 6.11y
+      @40-50, 9.91y @50-60, **10.71y @60-70, 11.00y @70-90**. 80% of
+      training is 18-40. Cole's fitted slope is 0.713, so the correction
+      **amplifies deviations 1.40x** — and `mae_corrected` (5.75) is worse
+      than `mae_raw` (4.85) overall, yet the corrected value is the
+      headline. Worse, `predict.py` hard-failed `AGE_OUT_OF_RANGE` on the
+      *corrected output*, so a raw 75 became a corrected 91.8 and errored
+      **after the full ~70-minute CAT12 run**. Maintainer's decisions:
+      accept 18-90, show a per-band accuracy warning, keep the corrected
+      headline but print a ±MAE band beside it. Implemented: band MAE is
+      computed at request time from the promoted model's own `predictions`
+      rows (reusing the query that already refits Cole — it must track
+      whichever model is promoted, so nothing is hardcoded), small bands
+      fall back to overall MAE, and an out-of-range corrected age is now
+      *reported as a warning*, never raised. Real training support
+      (9.2-84.7, p5-p95 21.4-60.0) replaced the hardcoded "(18.0, 90.0)"
+      in the user-facing text.
+
+      Also fixed: `region_columns_for` was called without `atlases=` at
+      inference though `promote.py` passes it at training time (3296 vs
+      3515 columns — harmless for today's volume-only model, silently
+      wrong for any surface model); `features.py`/`predict.py`/
+      `normative.py` fell back to `paths.datasets_dir` (the retired pooled
+      export) instead of the model's own `datasets_dir`; no shape
+      assertion before `model.predict`; `fit_norms` refit 1296 OLS
+      regressions per job despite its own docstring saying to cache;
+      `/jobs/{id}` 404'd before worker pickup, which combined with an
+      unguarded `body.stages.length` in the poll loop to make the page
+      hang on "Queued" forever for any second concurrent user; no upload
+      size/type/age/sex validation; no `job_id` UUID validation; no
+      subprocess timeout on `pydeface`/`dcm2niix`; uncapped zip
+      extraction; no global exception handler; no way to fetch the PDF
+      without email. New: `GET /jobs/{id}/report.pdf`, worker-startup
+      reconciliation of jobs stuck in `running`, `bag app retention-sweep`
+      + `scripts/retention_sweep.sh` (nothing had ever deleted opted-in
+      data), and `app.max_upload_size_mb` (100 — Cloudflare's free-plan
+      body limit is the real ceiling, so the app rejects first with a
+      message we control) and `app.public_base_url`.
+
+      **Stale docs corrected**: CAT12 version parity has been fine since
+      2026-08-25 (the training cohort *is* CAT26, produced by the same
+      `cat12.sif` the app runs) — the "CAT26.0.rc3 vs CAT12.9/2577
+      mismatch" warnings were obsolete. Turnstile config keys were always
+      correct. `models_registry` has exactly one production row (the
+      `database is locked` traceback rolled its whole transaction back).
+      The `/jobs/{id}/volume/t1.nii` 404s were correct behavior — the file
+      is deleted for non-retaining jobs.
+
+      Test suite 74 -> **118 passing**, ruff clean (4 pre-existing E501s in
+      `style.py`/`test_bias_correction.py` untouched). Deployment: real
+      systemd **user** units for api/worker/tunnel live in
+      `~/.config/systemd/user/` (NOT the repo — public repo, machine paths);
+      `deploy/systemd/*.service` stay as templates and gained a
+      `bagpipe-tunnel.service` one. `deploy/README.md` rewritten for the
+      tunnel (no nginx in this deployment — Cloudflare terminates TLS and
+      a WAF rate-limit rule replaces `limit_req`).
+
+      **Not yet done / owed before calling this launched**: the §6
+      reproducibility suite is RUNNING as of this update (`bag preprocess
+      repro-test`, 14 stratified real subjects through the real stage
+      graph, diffed against their stored `features`/`predictions`) —
+      `/mnt/62` came back, which had blocked it since 2026-08-24; nothing
+      here is verified against real data until it lands. Also owed: a real
+      browser upload through the tunnel with a live Turnstile challenge
+      (the captcha correctly fails closed, so this cannot be tested from
+      curl); `loginctl enable-linger` (needs sudo, or the services die on
+      logout); Resend + rotating the Gmail app password that is still
+      plaintext in `config/local.yaml`; the Cloudflare WAF rate-limit
+      rule; adding the new hostname to the Turnstile widget. Deliberately
+      out of scope for launch: wiring surface metrics into the app (would
+      unlock the better model, mae_raw 4.69 vs 4.86), and disabling
+      surface reconstruction for inference (uploads currently pay ~2-3x
+      latency for `surfextract` output the app never parses — a real win,
+      but it needs a container rebuild and re-verify).*
 
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.

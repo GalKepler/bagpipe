@@ -34,15 +34,20 @@ function severityFromZ(z) {
   return "low";
 }
 
-// Diverging blue<->red ramp keyed to z-score, breakpoints at -3,-1,0,1,3 so the
+// Diverging cool<->warm ramp keyed to z-score, breakpoints at -3,-1,0,1,3 so the
 // typical -1..+1 range stays near-neutral and only real outliers stand out.
+// Same tokens as everywhere else on the site (docs/design-brief.md §3,
+// static/js/brand-tokens.js): cool = below norm, warm = above norm — the
+// only saturated colors on the page are ones reporting actual data.
+import { TOKENS, hexToRGB255 } from "./js/brand-tokens.js";
+
 const DIVERGE_BREAKPOINTS = [-3, -1, 0, 1, 3];
 const DIVERGE_STOPS = [
-  [28, 92, 171], // below norm
-  [134, 182, 239],
-  [217, 213, 197], // neutral
-  [235, 169, 159],
-  [171, 58, 69], // above norm
+  hexToRGB255(TOKENS.cool),
+  hexToRGB255(TOKENS.cool).map((c, i) => Math.round((c + hexToRGB255(TOKENS.muted)[i]) / 2)),
+  hexToRGB255(TOKENS.muted), // neutral
+  hexToRGB255(TOKENS.warm).map((c, i) => Math.round((c + hexToRGB255(TOKENS.muted)[i]) / 2)),
+  hexToRGB255(TOKENS.warm),
 ];
 
 function lerpRgb(a, b, t) {

@@ -1,0 +1,30 @@
+# Template — copy to ~/.config/systemd/user/ (or /etc/systemd/system/) and fill
+# in the User/ExecStart path for this machine. Paths below are examples, not
+# real values — this repo is public (CLAUDE.md).
+#
+# Cloudflare Tunnel: the app's public ingress. Connects OUTBOUND to Cloudflare,
+# so no inbound port is opened on this host and no institutional firewall
+# change is needed; Cloudflare terminates TLS for the public hostname. This
+# replaces the nginx/caddy reverse proxy older versions of deploy/README.md
+# described — see § Public ingress.
+#
+# Requires a one-time interactive setup before this unit will start:
+#   cloudflared tunnel login
+#   cloudflared tunnel create bagpipe
+#   cloudflared tunnel route dns bagpipe <your-hostname>
+# which leaves credentials and config under ~/.cloudflared/.
+
+[Unit]
+Description=cloudflared tunnel fronting the bagpipe API
+After=network.target bagpipe-api.service
+Wants=bagpipe-api.service
+
+[Service]
+Type=simple
+ExecStart=/path/to/cloudflared --no-autoupdate tunnel run bagpipe
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

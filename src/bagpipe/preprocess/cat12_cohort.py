@@ -32,6 +32,7 @@ from pathlib import Path
 
 import yaml
 
+from bagpipe.core.apptainer import apptainer_env
 from bagpipe.core.config import get_path
 
 LEDGER_FILENAME = ".bagpipe_cat12_ledger.sqlite"
@@ -293,7 +294,12 @@ def _run_job(
     ] + [str(s) for s in staged]
 
     proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+        env=apptainer_env(),
     )
     try:
         stdout, _ = proc.communicate(timeout=timeout_s)
