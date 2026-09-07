@@ -60,7 +60,9 @@ limit: null # cap how many subjects ONE invocation launches — set to e.g. 2 fo
 # then-current machine; this workstation now has 32 cores (2026-08-21),
 # but don't just max out cores — check `free -h` first.
 nproc_per_job: 1
-concurrency: 12
+concurrency: 6  # lowered 2026-09-07: 12 was starving the app's single-slot
+                # inference worker for CPU scheduling time under this host's
+                # 32-core budget shared with everything else running here.
 subjects_per_job: 1 # MUST stay 1 — real confirmed bug, 2026-08-22: CAT12 forks a
                     # separate background subprocess per file whenever a job's data
                     # list has more than one file, REGARDLESS of nproc_per_job — and
