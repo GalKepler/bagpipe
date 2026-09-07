@@ -110,7 +110,9 @@ def _make_strata(y: np.ndarray, n_splits: int, max_bins: int) -> np.ndarray:
     return np.zeros(len(y), dtype=int)
 
 
-def inverse_age_density_weights(y: np.ndarray, n_bins: int = 20, max_ratio: float = 10.0) -> np.ndarray:
+def inverse_age_density_weights(
+    y: np.ndarray, n_bins: int = 20, max_ratio: float = 10.0
+) -> np.ndarray:
     """Per-sample weight = 1 / (age-histogram density at that sample),
     normalized to mean 1 and capped at `max_ratio` — so the training loss
     stops being dominated by the 18-40 mass (82% of this cohort) at the

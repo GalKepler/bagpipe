@@ -159,7 +159,10 @@ def promote(
     init_db()
     with get_session() as session:
         if stage == "production":
-            for existing in session.query(ModelRegistry).filter_by(name=model_name, stage="production"):
+            incumbents = session.query(ModelRegistry).filter_by(
+                name=model_name, stage="production"
+            )
+            for existing in incumbents:
                 existing.stage = "archived"
         entry = ModelRegistry(
             name=model_name,

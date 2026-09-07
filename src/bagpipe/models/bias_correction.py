@@ -97,7 +97,10 @@ def fit_region_correctors(model, X: np.ndarray, y: np.ndarray) -> dict[str, Cole
     stacker = model.model_
     correctors = {
         rname: ColeCorrection().fit(
-            y, stacker.region_estimators_[rname].predict(residuals[:, stacker.region_columns_[rname]])
+            y,
+            stacker.region_estimators_[rname].predict(
+                residuals[:, stacker.region_columns_[rname]]
+            ),
         )
         for rname in stacker.region_names_
     }

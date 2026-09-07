@@ -140,7 +140,9 @@ def test_lofo_and_nested_bias_correction_agree_within_noise():
     X, y, groups, _ = _synthetic(n_subjects=80, sessions_per_subject=3)
     kwargs = dict(X=X, y=y, groups=groups, n_splits=5, bias_corrector=get_corrector("cole"))
     lofo = evaluate(lambda fold_groups: _ShrinkToMean(), bias_correction_method="lofo", **kwargs)
-    nested = evaluate(lambda fold_groups: _ShrinkToMean(), bias_correction_method="nested", **kwargs)
+    nested = evaluate(
+        lambda fold_groups: _ShrinkToMean(), bias_correction_method="nested", **kwargs
+    )
     assert abs(lofo.metrics["cole_slope"] - nested.metrics["cole_slope"]) < 0.05
     assert abs(lofo.metrics["mae_corrected"] - nested.metrics["mae_corrected"]) < 0.5
 

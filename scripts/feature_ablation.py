@@ -38,7 +38,8 @@ from bagpipe.models.stacked import _grouped_outer_cv  # noqa: E402
 from bagpipe.models.tabular import build_region_mapping, build_region_matrix  # noqa: E402
 
 DATASETS_DIR = Path("outputs/datasets_v26")
-ATLASES = ["Schaefer2018N400n7Tian2020S2", "surf_Schaefer2018N400n7"]  # one parcellation, both sides
+# One parcellation, both sides (volume + surface).
+ATLASES = ["Schaefer2018N400n7Tian2020S2", "surf_Schaefer2018N400n7"]
 VOLUME = ["vol_gm", "vol_wm", "vol_csf"]
 SURFACE = ["thickness", "gyrification", "sulcal_depth", "fractal_dimension", "area"]
 FULL_PANEL = VOLUME + SURFACE
@@ -49,7 +50,8 @@ CUMULATIVE_COMBOS = {
     "+thickness": VOLUME + ["thickness"],
     "+gyrification": VOLUME + ["thickness", "gyrification"],
     "+sulcal_depth": VOLUME + ["thickness", "gyrification", "sulcal_depth"],
-    "+fractal_dimension": VOLUME + ["thickness", "gyrification", "sulcal_depth", "fractal_dimension"],
+    "+fractal_dimension": VOLUME
+    + ["thickness", "gyrification", "sulcal_depth", "fractal_dimension"],
     "full_panel": FULL_PANEL,
 }
 # leave-one-out from the full panel: which single metric hurts most if dropped?
@@ -142,8 +144,11 @@ def main():
             if r:
                 r["estimator"] = variant_name
                 rows.append(r)
-                print(f"  {name}: mae_raw={r['mae_raw']:.3f} mae_corrected={r['mae_corrected']:.3f} "
-                      f"r2_raw={r['r2_raw']:.3f} n={r['n_samples']} regions={r['n_regions']}")
+                print(
+                    f"  {name}: mae_raw={r['mae_raw']:.3f} "
+                    f"mae_corrected={r['mae_corrected']:.3f} "
+                    f"r2_raw={r['r2_raw']:.3f} n={r['n_samples']} regions={r['n_regions']}"
+                )
 
         print(f"\n== leave-one-out from full panel [{variant_name}] ==")
         for name, metrics in LOO_COMBOS.items():
@@ -151,8 +156,11 @@ def main():
             if r:
                 r["estimator"] = variant_name
                 rows.append(r)
-                print(f"  {name}: mae_raw={r['mae_raw']:.3f} mae_corrected={r['mae_corrected']:.3f} "
-                      f"r2_raw={r['r2_raw']:.3f} n={r['n_samples']} regions={r['n_regions']}")
+                print(
+                    f"  {name}: mae_raw={r['mae_raw']:.3f} "
+                    f"mae_corrected={r['mae_corrected']:.3f} "
+                    f"r2_raw={r['r2_raw']:.3f} n={r['n_samples']} regions={r['n_regions']}"
+                )
         print()
 
     out_path = Path("outputs/feature_ablation_results.csv")

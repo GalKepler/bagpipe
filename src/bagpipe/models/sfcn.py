@@ -275,7 +275,8 @@ class SFCNRegressor:
             missing = [k for k in missing if not k.startswith("head.")]
             if missing or unexpected:
                 raise RuntimeError(
-                    f"pretrained weight load left mismatches — missing={missing} unexpected={unexpected}"
+                    "pretrained weight load left mismatches — "
+                    f"missing={missing} unexpected={unexpected}"
                 )
         return model.to(self.device)
 
@@ -389,7 +390,9 @@ class SFCNRegressor:
     def _eval_mae(self, loader: DataLoader) -> float:
         self.model_.eval()
         errors = []
-        with torch.no_grad(), torch.autocast(device_type=self.device, enabled=self.device == "cuda"):
+        with torch.no_grad(), torch.autocast(
+            device_type=self.device, enabled=self.device == "cuda"
+        ):
             for volumes, ages in loader:
                 volumes, ages = volumes.to(self.device), ages.to(self.device)
                 errors.append((self.model_(volumes) - ages).abs().cpu().numpy())
@@ -402,7 +405,9 @@ class SFCNRegressor:
         )
         self.model_.eval()
         preds = []
-        with torch.no_grad(), torch.autocast(device_type=self.device, enabled=self.device == "cuda"):
+        with torch.no_grad(), torch.autocast(
+            device_type=self.device, enabled=self.device == "cuda"
+        ):
             for volumes in loader:
                 preds.append(self.model_(volumes.to(self.device)).cpu().numpy())
         return np.concatenate(preds)
