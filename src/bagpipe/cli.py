@@ -348,6 +348,21 @@ def main() -> None:
             f"{summary['reconciled']} stuck job(s) marked failed"
         )
 
+        # ponytail: `process_job`'s first line lazily imports
+        # bagpipe.app.pipeline, which drags in torch/sklearn/etc. Observed
+        # for real 2026-09-07: that first import happening on huey's
+        # worker_type="thread" background thread (not the main thread) left
+        # the worker thread permanently alive-but-stuck after its first
+        # task — huey's health check only restarts a worker whose thread has
+        # actually died, not one blocked forever, so every job submitted
+        # after the first was silently dequeued and never run. Importing it
+        # here, on the main thread, before the Consumer spawns worker
+        # threads, means the worker thread's later `import` is just a
+        # sys.modules cache hit — no first-time heavy C-extension init on a
+        # background thread. If this recurs, the next escalation is
+        # worker_type="process" instead of "thread".
+        import bagpipe.app.pipeline  # noqa: F401
+
         Consumer(
             huey, workers=args.workers, worker_type="process" if args.workers > 1 else "thread"
         ).run()
