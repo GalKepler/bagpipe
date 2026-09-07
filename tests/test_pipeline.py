@@ -273,13 +273,45 @@ def test_calibration_bands_drop_thinly_populated_bins():
     assert bands[0]["p10"] < bands[0]["median"] < bands[0]["p90"]
 
 
-def test_bag_histogram_is_symmetric_and_conserves_the_cohort():
-    histogram = predict._bag_histogram(predict._cohort_bag(_PRED_ROWS))
-    edges = histogram["edges"]
-    assert len(edges) == predict.BAG_HIST_BINS + 1
+def test_bag_histogram_spans_a_symmetric_range_and_conserves_the_cohort():
+    bag = np.concatenate([np.zeros(200), np.linspace(-8, 8, 60)])
+    histogram = predict._bag_histogram(bag)
+    edges, counts = histogram["edges"], histogram["counts"]
+    assert len(edges) == len(counts) + 1
     assert edges[0] == pytest.approx(-edges[-1])
-    # Values are clipped into range, never dropped.
-    assert sum(histogram["counts"]) == len(_PRED_ROWS)
+    # Values are clipped into range and pooled, never dropped.
+    assert sum(counts) == len(bag)
+
+
+def test_bag_histogram_publishes_no_bin_describing_an_individual():
+    """The aggregate-only contract: a tail bin holding one held-out subject
+    would disclose that person's gap to within the bin's width."""
+    bag = np.concatenate([np.zeros(400), [-9.0, 9.5]])  # two lone outliers
+    counts = predict._bag_histogram(bag)["counts"]
+    assert counts, "a 402-subject cohort has a publishable distribution"
+    assert all(c == 0 or c >= predict.MIN_BAND_N for c in counts)
+    assert sum(counts) == len(bag)
+
+
+def test_pool_sparse_bins_merges_into_the_smaller_neighbour():
+    edges = [0.0, 1.0, 2.0, 3.0, 4.0]
+    counts = [50, 3, 40, 60]  # the lone sparse bin sits between 50 and 40
+    pooled_edges, pooled_counts = predict._pool_sparse_bins(edges, counts)
+    assert pooled_counts == [50, 43, 60]
+    assert pooled_edges == [0.0, 1.0, 3.0, 4.0]
+    assert sum(pooled_counts) == sum(counts)
+
+
+def test_pool_sparse_bins_leaves_empty_bins_alone():
+    """A zero count discloses nothing, so it needs no merging — and merging
+    it would not help the sparse bin next to it anyway."""
+    edges = [0.0, 1.0, 2.0, 3.0]
+    counts = [40, 0, 30]
+    assert predict._pool_sparse_bins(edges, counts) == (edges, counts)
+
+
+def test_bag_histogram_is_empty_when_the_cohort_is_too_small_to_publish():
+    assert predict._bag_histogram(np.array([1.0, 2.0, 3.0])) == {"edges": [], "counts": []}
 
 
 def test_prediction_json_carries_the_population_block(tmp_path):

@@ -154,14 +154,62 @@ def _cohort_bag(rows: list[Prediction]) -> np.ndarray:
     return np.array([r.predicted_age_corrected - r.age_true for r in rows])
 
 
+def _pool_sparse_bins(edges: list[float], counts: list[int]) -> tuple[list[float], list[int]]:
+    """Merge any bin holding between 1 and `MIN_BAND_N - 1` subjects into a
+    neighbour, until every published bin is either empty or holds at least
+    `MIN_BAND_N`.
+
+    Without this, a tail bin containing a single held-out subject publishes
+    exactly what the aggregate-only contract forbids: that one person's brain
+    age gap, localised to that bin's width. Merging rather than zeroing keeps
+    the distribution honest — the subjects stay in the total, the bin just
+    gets wide enough to stop describing an individual. (Empty bins are left
+    alone; a count of zero discloses nothing.)
+    """
+    edges, counts = list(edges), list(counts)
+    while len(counts) > 1:
+        sparse = [i for i, c in enumerate(counts) if 0 < c < MIN_BAND_N]
+        if not sparse:
+            break
+        i = min(sparse, key=lambda i: counts[i])
+        # Merge into whichever neighbour is itself smaller, so pooling grows
+        # the thin tails instead of eating into the dense middle.
+        if i == 0:
+            j = 1
+        elif i == len(counts) - 1:
+            j = i - 1
+        else:
+            j = i - 1 if counts[i - 1] <= counts[i + 1] else i + 1
+        lo, hi = min(i, j), max(i, j)
+        counts[lo] = counts[lo] + counts[hi]
+        del counts[hi]
+        del edges[hi]  # drop the edge between the two merged bins
+    return edges, counts
+
+
 def _bag_histogram(bag: np.ndarray) -> dict:
-    """Counts per bin over a robust range (1st-99th percentile, symmetric
-    about zero), so one extreme validation subject can't squash the shape of
-    the distribution the reader is being placed in."""
+    """Distribution of the cohort's gaps over a robust range (99th percentile
+    of |gap|, symmetric about zero) so one extreme validation subject can't
+    squash the shape the reader is being placed in, with sparse bins pooled
+    (`_pool_sparse_bins`) so no bin describes an individual.
+
+    Bins are therefore NOT uniform-width after pooling — `charts.bag_distribution`
+    draws density (count / bin width), not raw count.
+    """
     limit = float(max(np.percentile(np.abs(bag), 99), 1.0))
     edges = np.linspace(-limit, limit, BAG_HIST_BINS + 1)
     counts, _ = np.histogram(np.clip(bag, edges[0], edges[-1]), bins=edges)
-    return {"edges": [round(float(e), 3) for e in edges], "counts": [int(c) for c in counts]}
+
+    pooled_edges, pooled_counts = _pool_sparse_bins(
+        [float(e) for e in edges], [int(c) for c in counts]
+    )
+    # A cohort too small to fill even one bin has no publishable distribution.
+    if not any(c >= MIN_BAND_N for c in pooled_counts):
+        return {"edges": [], "counts": []}
+    return {
+        "edges": [round(e, 3) for e in pooled_edges],
+        "counts": pooled_counts,
+    }
 
 
 def _calibration_bands(rows: list[Prediction]) -> list[dict]:

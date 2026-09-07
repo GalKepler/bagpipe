@@ -121,3 +121,24 @@ def test_region_display_names_are_escaped_into_the_svg():
     scores = top_deviations(_scores({LABELS[0]: 2.0}), n=1)
     hacked = [type(scores[0])(**{**scores[0].__dict__, "display": "A & B <tag>"})]
     _parse(charts.deviation_ranking(hacked, charts.DARK))
+
+
+def test_bag_distribution_draws_density_not_count():
+    """Bins are pooled to variable widths upstream (`predict._bag_histogram`),
+    so a merged wide bin must not tower over the dense middle it was pooled
+    away from — bar height is count per unit width."""
+    # Two bins holding the same count, the second four times as wide: as a
+    # density the wide one must be a quarter the height.
+    histogram = {"edges": [0.0, 1.0, 5.0], "counts": [40, 40]}
+    root = _parse(charts.bag_distribution(histogram, 0.5, 50.0, charts.DARK))
+    heights = sorted(
+        float(el.get("height")) for el in root.iter() if el.tag.endswith("rect")
+    )
+    assert heights[1] == pytest.approx(heights[0] * 4, rel=0.02)
+
+
+def test_bag_distribution_handles_a_single_pooled_bin():
+    """A cohort pooled all the way down to one bin still renders."""
+    svg = charts.bag_distribution({"edges": [-3.0, 3.0], "counts": [30]}, 0.0, 50.0, charts.DARK)
+    _parse(svg)
+    assert "<rect" in svg

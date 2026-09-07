@@ -126,15 +126,20 @@ def bag_distribution(
     plot_w, plot_h = w - pad_l - pad_r, h - pad_t - pad_b
     lo, hi = edges[0], edges[-1]
     span = hi - lo or 1.0
-    peak = max(counts) or 1
+    # Bin widths are not uniform — `predict._bag_histogram` pools sparse tail
+    # bins so none of them describes a single subject — so bar height is
+    # density, not count. Drawing raw counts here would make a merged wide
+    # bin tower over the dense middle it was pooled away from.
+    densities = [c / (edges[i + 1] - edges[i] or 1.0) for i, c in enumerate(counts)]
+    peak = max(densities) or 1.0
 
     def x_of(value: float) -> float:
         return pad_l + (min(max(value, lo), hi) - lo) / span * plot_w
 
     bars = []
-    for i, count in enumerate(counts):
+    for i in range(len(counts)):
         x0, x1 = x_of(edges[i]), x_of(edges[i + 1])
-        bar_h = count / peak * plot_h
+        bar_h = densities[i] / peak * plot_h
         # The bin containing the reader is filled in their gap's own color;
         # the rest of the distribution stays neutral, so the figure has
         # exactly one colored element and it is the reader's result.

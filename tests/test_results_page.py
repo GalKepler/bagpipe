@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -119,3 +120,19 @@ def test_page_renders_without_a_population_block(prediction, qc):
     prediction.pop("population")
     html = render(prediction, qc, "job-1", volume_available=False)
     assert "Brain Age Gap: +2.4 years" in html
+
+
+def test_brain_map_detail_never_renders_a_raw_atlas_label(prediction, qc):
+    """The detail panel is built client-side from region_names.json, so the
+    contract is enforced in `static/brainmap.js` rather than in this HTML —
+    assert the template it uses carries no atlas label."""
+    import bagpipe.app.results_page as results_page
+
+    brainmap = (Path(results_page.__file__).parent / "static" / "brainmap.js").read_text()
+    detail = brainmap[
+        brainmap.index("function renderDetail") : brainmap.index("function initBrainmap")
+    ]
+    # `meta.label` is still the z-score lookup key inside this function; what
+    # must not exist is the label interpolated into the rendered markup.
+    assert "${meta.label}" not in detail, "detail panel must show anatomy, not the join key"
+    assert "${named.lobe}" in detail

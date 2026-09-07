@@ -55,7 +55,7 @@ the Cole corrector and the per-age-band MAE, so nothing can disagree):
 | Field | What it is |
 |---|---|
 | `bag_percentile` | Where the reader's corrected gap falls in the cohort's gap distribution |
-| `bag_histogram` | Counts per bin over a robust (1st–99th percentile) symmetric range |
+| `bag_histogram` | Counts per bin over a robust (99th-percentile-of-\|gap\|) symmetric range, with sparse bins pooled so no published bin holds between 1 and `MIN_BAND_N - 1` subjects. Bins are therefore not uniform-width and the chart draws density |
 | `calibration` | Per 5-year age bin: cohort median and 10th/90th percentile of predicted age |
 | `bag_mean`, `bag_sd`, `n` | Distribution summary |
 
@@ -65,6 +65,15 @@ percentiles over at least `MIN_BAND_N` (10) subjects. No per-subject row —
 not even an anonymous (age, prediction) pair — leaves the machine. Age bins
 below the threshold are dropped rather than plotted, both because their
 percentiles are noise and because a thin bin starts to describe individuals.
+
+The gap histogram is held to the same rule by pooling rather than dropping:
+a tail bin holding one held-out subject would disclose that person's gap to
+within the bin's width, so `_pool_sparse_bins` merges it into a neighbour
+until every published bin is empty or holds at least `MIN_BAND_N`. Merging
+keeps the subjects in the total and the distribution honest — the bin just
+gets wide enough to stop describing an individual. On the current production
+cohort (n≈2260) no pooling triggers; it is a floor for small cohorts, not a
+change to the shipped figure.
 
 An empty `calibration` (a cohort too small to fill any bin) is a valid
 outcome: the chart returns `""` and both surfaces omit the figure entirely

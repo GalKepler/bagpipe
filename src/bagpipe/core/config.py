@@ -20,7 +20,12 @@ class ConfigError(RuntimeError):
 
 
 @lru_cache
-def load_config(path: Path = LOCAL_CONFIG_PATH) -> dict:
+def load_config(path: Path | None = None) -> dict:
+    # Resolved at call time, not bound as a default: a module-level default
+    # is fixed at import and leaves this module untestable and unconfigurable
+    # from a test session (tests/conftest.py repoints LOCAL_CONFIG_PATH at a
+    # synthetic config — CI has no config/local.yaml, it is git-ignored).
+    path = path or LOCAL_CONFIG_PATH
     if not path.exists():
         raise ConfigError(
             f"{path} not found. Copy config/local.yaml.example to config/local.yaml "

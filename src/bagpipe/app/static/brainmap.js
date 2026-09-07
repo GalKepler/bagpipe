@@ -166,9 +166,8 @@ function renderDetail(detailEl, meta, zscores, names) {
     `;
   }).join("");
 
-  // The atlas label (`LH_Vis_23`) is a join key, not a name — show the
-  // anatomical name from region_names.json and keep the label only as the
-  // small print, for anyone matching this against the atlas itself.
+  // The atlas label (`LH_Vis_23`) is a join key, never shown: everything in
+  // this panel is reader-facing anatomy from region_names.json.
   const named = names?.regions?.[meta.label];
   const title = named ? named.display : meta.label;
   const network = named
@@ -181,7 +180,7 @@ function renderDetail(detailEl, meta, zscores, names) {
       ${network ? "&middot; " + network : ""}
       ${named && named.coverage < 0.6 ? "&middot; spans two areas" : ""}</p>
     ${rows || '<p class="brainmap__detail-placeholder">No z-score for this region.</p>'}
-    <p class="brainmap__detail-label">${meta.label}</p>
+    ${named ? `<p class="brainmap__detail-label">${named.lobe}</p>` : ""}
   `;
 }
 
