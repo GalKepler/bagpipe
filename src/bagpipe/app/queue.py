@@ -61,6 +61,13 @@ def process_job(
             chronological_age=chronological_age,
         )
 
+        if manifest.status == "failed":
+            from bagpipe.app.failure_log import log_failure
+
+            log_failure(
+                job_id, manifest.error.stage, manifest.error.code, manifest.error.message
+            )
+
         if notify_email:
             try:
                 _notify(notify_email, Path(work_dir), manifest)

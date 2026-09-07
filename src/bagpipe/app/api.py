@@ -257,6 +257,12 @@ async def job_status(job_id: str) -> JSONResponse:
         if not job_dir.is_dir():
             raise HTTPException(status_code=404, detail="unknown or not-yet-started job")
         if _job_task_lost(job_dir):
+            orphan_logged = job_dir / "orphan_logged"
+            if not orphan_logged.exists():
+                from bagpipe.app.failure_log import log_failure
+
+                log_failure(job_id, "queue", "task_lost", "huey task dequeued but never executed")
+                orphan_logged.touch()
             return JSONResponse(
                 {
                     "job_id": job_id,

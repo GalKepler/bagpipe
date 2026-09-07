@@ -143,6 +143,30 @@ def test_job_status_failed_if_task_lost(tmp_path, monkeypatch):
     assert "error" in body
 
 
+def test_job_status_task_lost_logs_failure_once(tmp_path, monkeypatch):
+    """Repeated polling of an orphaned job must record it in failed_jobs.jsonl
+    exactly once, not once per poll.
+    """
+    from bagpipe.app import failure_log
+
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    monkeypatch.setattr(failure_log, "get_path", lambda key: tmp_path / "uploads")
+    job_dir = tmp_path / JOB1
+    job_dir.mkdir(parents=True)
+    (job_dir / "task_id").write_text("task-1")
+    old = time.time() - api._ORPHAN_GRACE_SECONDS - 60
+    os.utime(job_dir / "task_id", (old, old))
+    monkeypatch.setattr(api.huey, "pending", lambda: [])
+
+    client = TestClient(api.app)
+    client.get(f"/jobs/{JOB1}")
+    client.get(f"/jobs/{JOB1}")
+
+    lines = (tmp_path / "failed_jobs.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["job_id"] == JOB1
+
+
 def test_job_status_succeeded_includes_result(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     _write_manifest(tmp_path / JOB1 / "run", "succeeded")
