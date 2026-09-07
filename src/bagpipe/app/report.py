@@ -114,7 +114,8 @@ _STAT = Template("""
 
 _REGION_ROW = Template(
     "<tr><td>$region</td><td>$network</td>"
-    '<td class="num">$gm</td><td class="num">$wm</td><td class="num">$csf</td></tr>'
+    '<td class="num">$gm</td><td class="num">$wm</td><td class="num">$csf</td>'
+    '<td class="num">$bag</td></tr>'
 )
 
 
@@ -190,18 +191,27 @@ def _accuracy_caveat_html(prediction: dict) -> str:
     """
 
 
-def _region_table(scores: list, zscores: dict, n_top_regions: int) -> str:
+def _region_table(scores: list, zscores: dict, regional_bag: dict, n_top_regions: int) -> str:
     """The ranked regions as a table, one row per region and one column per
     tissue — the figure above it shows the shape, this carries the numbers
     for anyone who wants to check them. Named anatomically, with the atlas
     label dropped entirely: it is a join key, and the interactive report is
     where someone would go to look a region up.
+
+    `regional_bag` (keyed the same way as `zscores`' `label`) is a distinct
+    number from the GM/WM/CSF z-scores: those say how far a region's raw
+    tissue value sits from the cohort norm, this says what age that region's
+    own model predicts — years, not standard deviations.
     """
     top = region_names.top_deviations(scores, n=n_top_regions)
 
     def z_for(label: str, metric: str) -> str:
         value = zscores.get(f"{region_names.ATLAS_PREFIX}__{label}__{metric}")
         return "—" if value is None else f"{value:+.2f}"
+
+    def bag_for(label: str) -> str:
+        value = (regional_bag.get(label) or {}).get("bag_corrected")
+        return "—" if value is None else f"{value:+.1f}y"
 
     rows = "\n".join(
         _REGION_ROW.substitute(
@@ -210,16 +220,20 @@ def _region_table(scores: list, zscores: dict, n_top_regions: int) -> str:
             gm=z_for(score.label, "vol_gm"),
             wm=z_for(score.label, "vol_wm"),
             csf=z_for(score.label, "vol_csf"),
+            bag=bag_for(score.label),
         )
         for score in top
     )
     return f"""
     <table>
-    <tr><th>Region</th><th>Network</th><th>GM</th><th>WM</th><th>CSF</th></tr>
+    <tr><th>Region</th><th>Network</th><th>GM</th><th>WM</th><th>CSF</th><th>BAG</th></tr>
     {rows}
     </table>
-    <p class="muted">Values are standard deviations from the reference cohort's
-    average for someone of your predicted age, sex and head size.</p>
+    <p class="muted">GM/WM/CSF are standard deviations from the reference cohort's average
+    for someone of your predicted age, sex and head size. BAG is that region's own predicted
+    age minus your chronological age, in years — from a much smaller, less regularized model
+    than the headline number above, so individual regions can swing by decades even when the
+    overall result is unremarkable.</p>
     """
 
 
@@ -323,7 +337,7 @@ def render_success_html(
               limit=n_top_regions),
           "Anything inside the shaded band is within the range two thirds of the cohort falls "
           "in — a region topping this list is not by itself a finding.")}
-      {_region_table(scores, zscores, n_top_regions)}
+      {_region_table(scores, zscores, prediction.get("regional_bag") or {}, n_top_regions)}
       {interactive_note}
     </section>
     """

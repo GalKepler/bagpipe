@@ -29,8 +29,37 @@ const METRIC_LABELS = {
   sulcal_depth: "Sulcal depth",
   fractal_dimension: "Fractal dimension",
   area: "Surface area",
+  bag: "Brain age gap",
 };
 const METRIC_ORDER = Object.keys(METRIC_LABELS);
+
+// "bag" isn't a z-score (it's the region's own predicted age minus yours,
+// in years, from the stacked model's per-region base learner — a different
+// quantity from how far the region's raw tissue value sits from the
+// cohort norm) — its own axis limit and unit keep the shared bar/color
+// helpers below meaningful for both.
+const METRIC_SCALE = {
+  bag: { limit: 15, unit: "y" },
+};
+const DEFAULT_SCALE = { limit: Z_LIMIT, unit: "σ" };
+function scaleFor(metric) {
+  return METRIC_SCALE[metric] || DEFAULT_SCALE;
+}
+
+// Each region's BAG comes from a base learner fit on just that region's own
+// three tissue features — far less regularized than the full stacked
+// meta-learner behind the headline number, so individual regions swing much
+// wider (tens of years isn't unusual) even though the global BAG is a few
+// years. Shown as-is (not clipped) per maintainer decision, with this note
+// so a reader doesn't mistake a single region's swing for the model's
+// overall accuracy.
+const METRIC_NOTES = {
+  bag: "Each region's brain age gap comes from a much smaller, less " +
+    "regularized model than the headline number above — individual regions " +
+    "can swing by decades even when the overall result is unremarkable. " +
+    "Read these as which regions the model weighs as older or younger, not " +
+    "as accuracy on the same footing as the headline BAG.",
+};
 
 // `meta` is the secondary attribute each row shows: whatever the current
 // grouping is NOT already saying, so a row inside "Default mode" reads
@@ -57,12 +86,13 @@ function zColor(z) {
   return z >= 0 ? TOKENS.warm : TOKENS.cool;
 }
 
-function zOpacity(z) {
-  return (0.35 + 0.65 * Math.min(Math.abs(z) / Z_LIMIT, 1)).toFixed(2);
+function zOpacity(z, limit = Z_LIMIT) {
+  return (0.35 + 0.65 * Math.min(Math.abs(z) / limit, 1)).toFixed(2);
 }
 
-function fmt(z) {
-  return `${z >= 0 ? "+" : ""}${z.toFixed(2)}`;
+function fmt(z, unit = "σ") {
+  const digits = unit === "y" ? 1 : 2;
+  return `${z >= 0 ? "+" : ""}${z.toFixed(digits)}${unit}`;
 }
 
 /** `{"<atlas>__<label>__<metric>": z}` -> `{metric: {label: z}}` plus the
@@ -106,13 +136,13 @@ function buildRows(names, byMetric, metric) {
     .filter(Boolean);
 }
 
-function barSvg(z) {
-  const clamped = Math.max(-Z_LIMIT, Math.min(Z_LIMIT, z));
+function barSvg(z, limit = Z_LIMIT) {
+  const clamped = Math.max(-limit, Math.min(limit, z));
   const centre = 50;
-  const half = (clamped / Z_LIMIT) * 50;
+  const half = (clamped / limit) * 50;
   const x = half >= 0 ? centre : centre + half;
   const width = Math.max(Math.abs(half), 0.6);
-  const bandHalf = 50 / Z_LIMIT; // ±1σ
+  const bandHalf = 50 / limit; // one unit of scale either side of centre
   return `
     <svg class="region-row__bar" viewBox="0 0 100 12" preserveAspectRatio="none" aria-hidden="true">
       <rect x="0" y="5" width="100" height="2" fill="var(--line)" fill-opacity="0.5"/>
@@ -120,20 +150,23 @@ function barSvg(z) {
             fill="var(--line)"/>
       <line x1="${centre}" y1="0" x2="${centre}" y2="12" stroke="var(--muted)" stroke-width="0.6"/>
       <rect x="${x}" y="3.5" width="${width}" height="5" rx="0.5"
-            fill="${zColor(z)}" fill-opacity="${zOpacity(z)}"/>
+            fill="${zColor(z)}" fill-opacity="${zOpacity(z, limit)}"/>
     </svg>`;
 }
 
-function rowHtml(row, metrics, byMetric, meta) {
+function rowHtml(row, metric, metrics, byMetric, meta) {
+  const scale = scaleFor(metric);
   const others = metrics
     .map((m) => {
-      const z = byMetric[m]?.[row.label];
-      if (z === undefined) return "";
+      const value = byMetric[m]?.[row.label];
+      if (value === undefined) return "";
+      const mScale = scaleFor(m);
       return `<span class="region-row__chip"><span class="region-row__chip-label">${
         METRIC_LABELS[m] || m
-      }</span><span class="region-row__chip-value" style="color:${zColor(z)}">${fmt(
-        z
-      )}σ</span></span>`;
+      }</span><span class="region-row__chip-value" style="color:${zColor(value)}">${fmt(
+        value,
+        mScale.unit
+      )}</span></span>`;
     })
     .join("");
 
@@ -150,8 +183,11 @@ function rowHtml(row, metrics, byMetric, meta) {
       <button type="button" class="region-row__button" aria-expanded="false">
         <span class="region-row__name">${row.display}${approx}</span>
         <span class="region-row__meta">${meta(row)}</span>
-        ${barSvg(row.z)}
-        <span class="region-row__value" style="color:${zColor(row.z)}">${fmt(row.z)}σ</span>
+        ${barSvg(row.z, scale.limit)}
+        <span class="region-row__value" style="color:${zColor(row.z)}">${fmt(
+          row.z,
+          scale.unit
+        )}</span>
       </button>
       <div class="region-row__detail" hidden>
         <p class="region-row__detail-line">${row.anatomy} · ${
@@ -162,9 +198,13 @@ function rowHtml(row, metrics, byMetric, meta) {
     </li>`;
 }
 
-function groupSummary(rows) {
+function outlierThreshold(scale) {
+  return scale.unit === "y" ? scale.limit / 3 : 2;
+}
+
+function groupSummary(rows, scale) {
   const mean = rows.reduce((sum, r) => sum + r.z, 0) / rows.length;
-  const beyond = rows.filter((r) => Math.abs(r.z) >= 2).length;
+  const beyond = rows.filter((r) => Math.abs(r.z) >= outlierThreshold(scale)).length;
   return { mean, beyond };
 }
 
@@ -174,6 +214,18 @@ export function initRegionExplorer() {
 
   const raw = JSON.parse(document.getElementById("regional-zscores")?.textContent || "{}");
   const { byMetric, metrics } = indexZscores(raw);
+
+  // Regional BAG isn't a z-score column (`bagpipe.app.pipeline.predict.
+  // _regional_bag`) — a separate script tag, keyed directly by region
+  // label rather than the atlas__label__metric triple the others use.
+  const bag = JSON.parse(document.getElementById("regional-bag")?.textContent || "{}");
+  const bagValues = Object.fromEntries(
+    Object.entries(bag).map(([label, v]) => [label, v.bag_corrected])
+  );
+  if (Object.keys(bagValues).length) {
+    byMetric.bag = bagValues;
+    metrics.push("bag");
+  }
   if (!metrics.length) return;
 
   const searchEl = root.querySelector("[data-explorer-search]");
@@ -183,6 +235,7 @@ export function initRegionExplorer() {
   const metricEl = root.querySelector("[data-explorer-metric]");
   const listEl = root.querySelector("[data-explorer-list]");
   const countEl = root.querySelector("[data-explorer-count]");
+  const noteEl = root.querySelector("[data-explorer-note]");
 
   metricEl.innerHTML = metrics
     .map(
@@ -213,13 +266,18 @@ export function initRegionExplorer() {
   function visibleRows() {
     const rows = buildRows(state.names, byMetric, state.metric);
     const query = state.query.trim().toLowerCase();
+    const outlierAt = outlierThreshold(scaleFor(state.metric));
     return rows
       .filter((r) => (!query || r.haystack.includes(query)))
-      .filter((r) => (!state.outliersOnly || Math.abs(r.z) >= 2))
+      .filter((r) => (!state.outliersOnly || Math.abs(r.z) >= outlierAt))
       .sort(SORTS[state.sort].cmp);
   }
 
   function render() {
+    const note = METRIC_NOTES[state.metric];
+    noteEl.textContent = note || "";
+    noteEl.hidden = !note;
+
     const rows = visibleRows();
     countEl.textContent = rows.length
       ? `${rows.length} region${rows.length === 1 ? "" : "s"}`
@@ -239,7 +297,7 @@ export function initRegionExplorer() {
     }
     if (state.group === "none") {
       listEl.innerHTML = `<ul class="region-list">${rows
-        .map((r) => rowHtml(r, metrics, byMetric, grouping.meta))
+        .map((r) => rowHtml(r, state.metric, metrics, byMetric, grouping.meta))
         .join("")}</ul>`;
     } else {
       const groups = new Map();
@@ -260,7 +318,8 @@ export function initRegionExplorer() {
       });
       listEl.innerHTML = ordered
         .map(([name, groupRows]) => {
-          const { mean, beyond } = groupSummary(groupRows);
+          const scale = scaleFor(state.metric);
+          const { mean, beyond } = groupSummary(groupRows, scale);
           const collapsed = state.collapsed.has(name);
           return `
             <section class="region-group" data-group="${name}">
@@ -269,12 +328,15 @@ export function initRegionExplorer() {
                 <span class="region-group__name">${name}</span>
                 <span class="region-group__stat">${groupRows.length} regions</span>
                 <span class="region-group__stat">mean <span style="color:${zColor(mean)}">${fmt(
-                  mean
-                )}σ</span></span>
-                <span class="region-group__stat">${beyond} beyond ±2σ</span>
+                  mean,
+                  scale.unit
+                )}</span></span>
+                <span class="region-group__stat">${beyond} beyond &plusmn;${outlierThreshold(
+                  scale
+                )}${scale.unit}</span>
               </button>
               <ul class="region-list"${collapsed ? " hidden" : ""}>${groupRows
-                .map((r) => rowHtml(r, metrics, byMetric, grouping.meta))
+                .map((r) => rowHtml(r, state.metric, metrics, byMetric, grouping.meta))
                 .join("")}</ul>
             </section>`;
         })

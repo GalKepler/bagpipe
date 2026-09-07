@@ -626,6 +626,12 @@ RESULTS_CSS = """
   background: var(--surface);
 }
 .explorer__empty { color: var(--muted); font-size: 0.9em; padding: 1.5em; margin: 0; }
+.explorer__note {
+  color: var(--muted);
+  font-size: 0.78em;
+  line-height: 1.5;
+  margin: 0.6em 0 0;
+}
 
 .region-group + .region-group { border-top: 1px solid var(--line); }
 .region-group__head {

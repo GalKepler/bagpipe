@@ -20,8 +20,36 @@ from bagpipe.app.pipeline.base import PipelineError
 from bagpipe.app.pipeline.models import Environment, JobInput, Manifest
 
 
+class _StubRegionEstimator:
+    """Deterministic per-region "age predictor": 50 + that region's own
+    (single) feature value — same shape contract as a real
+    `region_estimators_[rname]` (a fitted sklearn `Pipeline`)."""
+
+    def predict(self, x_region):
+        return np.array([50.0 + x_region[0, 0]])
+
+
+class _StubRegionCorrector:
+    def transform(self, y_pred):
+        return y_pred + 10.0  # arbitrary, distinguishable from the raw region age
+
+
+class _StubAdjuster:
+    def transform(self, region_x, tiv, sex):  # noqa: ARG002 — identity for the stub
+        return region_x
+
+
+class _StubStacker:
+    region_names_ = ["R1", "R2"]
+    region_columns_ = {"R1": [0], "R2": [1]}
+    region_estimators_ = {"R1": _StubRegionEstimator(), "R2": _StubRegionEstimator()}
+    region_correctors_ = {"R1": _StubRegionCorrector(), "R2": _StubRegionCorrector()}
+
+
 class _StubModel:
     region_medians_ = np.zeros(2)  # 2 region columns, matches REGION_COLUMNS
+    adjuster_ = _StubAdjuster()
+    model_ = _StubStacker()
 
     def predict(self, x):
         return np.array([50.0 + x[0, 0]])  # deterministic, depends on first region col
@@ -106,6 +134,51 @@ def test_predict_stage_happy_path(tmp_path):
     assert result.metrics["age_band_n"] == len(_PRED_ROWS)
     assert result.metrics["age_band_mae_corrected"] == pytest.approx(1.5)
     assert result.metrics["age_out_of_range"] is False
+
+
+def test_predict_stage_writes_regional_bag(tmp_path):
+    """Regional BAG is a distinct quantity from `regional_zscores` — each
+    region's own base-learner age prediction, Cole-corrected with its own
+    corrector (`region_correctors_`), minus chronological age. See
+    `bagpipe.app.pipeline.predict._regional_bag`."""
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "features.json").write_text(
+        '{"atlas__R1__vol_gm": 3.0, "atlas__R2__vol_gm": 4.0, "TIV": 1500.0}'
+    )
+
+    stage = predict.PredictStage()
+    result = stage.run(tmp_path, _manifest(age=40.0))
+
+    prediction = json.loads((tmp_path / "predict" / "prediction.json").read_text())
+    regional_bag = prediction["regional_bag"]
+    assert set(regional_bag) == {"R1", "R2"}
+    # R1: raw = 50 + 3.0 = 53.0, corrected (stub +10) = 63.0, bag = 63.0 - 40.0
+    assert regional_bag["R1"]["predicted_age_raw"] == pytest.approx(53.0)
+    assert regional_bag["R1"]["predicted_age_corrected"] == pytest.approx(63.0)
+    assert regional_bag["R1"]["bag_corrected"] == pytest.approx(23.0)
+    # R2: raw = 50 + 4.0 = 54.0, corrected = 64.0, bag = 24.0
+    assert regional_bag["R2"]["bag_corrected"] == pytest.approx(24.0)
+    assert result.outputs["prediction"] == "predict/prediction.json"
+
+
+def test_predict_stage_regional_bag_requires_region_correctors(tmp_path):
+    """A production model artifact promoted before `fit_region_correctors`
+    was wired in (CLAUDE.md 2026-08-27) must fail loudly, not silently omit
+    regional BAG or crash with an unhelpful AttributeError."""
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "features.json").write_text(
+        '{"atlas__R1__vol_gm": 3.0, "atlas__R2__vol_gm": 4.0, "TIV": 1500.0}'
+    )
+    del _StubStacker.region_correctors_
+    try:
+        stage = predict.PredictStage()
+        with pytest.raises(PipelineError, match="Cole correctors"):
+            stage.run(tmp_path, _manifest(age=40.0))
+    finally:
+        _StubStacker.region_correctors_ = {
+            "R1": _StubRegionCorrector(),
+            "R2": _StubRegionCorrector(),
+        }
 
 
 def test_predict_stage_band_uses_matching_band_when_n_sufficient(tmp_path):

@@ -31,11 +31,13 @@ from pathlib import Path
 import cloudpickle
 import numpy as np
 
+from bagpipe.app import region_names
 from bagpipe.app.normative import fit_norms_cached, regional_zscores
 from bagpipe.app.pipeline.base import ErrorCode, PipelineError, StageResult
 from bagpipe.db.base import get_session
 from bagpipe.db.models import ModelRegistry, Prediction
 from bagpipe.models.bias_correction import ColeCorrection
+from bagpipe.models.covariate_adjustment import _fillna
 from bagpipe.models.evaluate import AGE_BANDS
 from bagpipe.models.evaluate import band_label as _band_label
 from bagpipe.models.tabular import SEX_MAP, region_columns_for
@@ -245,6 +247,56 @@ def _calibration_bands(rows: list[Prediction]) -> list[dict]:
     return bands
 
 
+def _regional_bag(model, x: np.ndarray, chronological_age: float | None) -> dict[str, dict]:
+    """Per-region brain age gap — what age each region's OWN base learner
+    predicts (Cole-corrected with its own corrector, fit at promotion time —
+    `bagpipe.models.bias_correction.fit_region_correctors`), not the
+    normative z-score `regional_zscores` already reports. Same
+    preprocessing `TIVSexAdjustedRegressor.predict`/`fit_region_correctors`
+    use (median-impute, then TIV/sex-adjust), reused here rather than
+    re-derived — see `notebooks/bag_correlates_explorer.ipynb`, the existing
+    consumer of `region_correctors_`.
+
+    Region keys are normalized to match `regional_zscores`' `label` (atlas
+    prefix stripped) so the UI can join the two by the same key. The
+    production model's own `region_names_` are atlas-qualified
+    ("Schaefer2018N400n7Tian2020S2__LH_Cont_Cing_1", baked in at training
+    time by whatever `bagpipe.models.tabular.build_region_mapping` did on
+    that run) rather than bare labels — verified against the real
+    production artifact, 2026-09-07 — so this strips the same
+    `region_names.ATLAS_PREFIX` the rest of the report already hardcodes to
+    this one cortical+subcortical atlas.
+    """
+    stacker = model.model_
+    if not hasattr(stacker, "region_correctors_"):
+        raise PipelineError(
+            ErrorCode.MODEL_LOAD_FAILED,
+            "production model has no per-region Cole correctors "
+            "(bagpipe.models.bias_correction.fit_region_correctors) — re-promote to enable "
+            "regional BAG.",
+        )
+
+    region_x, tiv, sex = x[:, :-2], x[:, -2], x[:, -1]
+    residuals = model.adjuster_.transform(_fillna(region_x, model.region_medians_), tiv, sex)
+    atlas_prefix = f"{region_names.ATLAS_PREFIX}__"
+
+    regional: dict[str, dict] = {}
+    for rname in stacker.region_names_:
+        raw_age = float(
+            stacker.region_estimators_[rname].predict(residuals[:, stacker.region_columns_[rname]])[
+                0
+            ]
+        )
+        corrected_age = float(stacker.region_correctors_[rname].transform(np.array([raw_age]))[0])
+        label = rname.removeprefix(atlas_prefix)
+        regional[label] = {
+            "predicted_age_raw": raw_age,
+            "predicted_age_corrected": corrected_age,
+            "bag_corrected": corrected_age - (chronological_age or corrected_age),
+        }
+    return regional
+
+
 def _population_context(rows: list[Prediction], user_bag: float | None) -> dict:
     """Everything the report needs to say "and here is where that sits"."""
     bag = _cohort_bag(rows)
@@ -330,6 +382,7 @@ class PredictStage:
 
         chronological_age = manifest.input.chronological_age
         bag_corrected = corrected - (chronological_age or corrected)
+        regional_bag = _regional_bag(model, x, chronological_age)
         population = _population_context(
             pred_rows, bag_corrected if chronological_age is not None else None
         )
@@ -347,6 +400,7 @@ class PredictStage:
                     "chronological_age": chronological_age,
                     "sex": sex,
                     "regional_zscores": zscores,
+                    "regional_bag": regional_bag,
                     "age_band": band,
                     "age_out_of_range": age_out_of_range,
                     "training_support": support,

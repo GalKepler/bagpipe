@@ -61,27 +61,46 @@ export class VolumeViewer extends EventTarget {
   // _load() itself once volumes are in — going through the guarded method
   // there would deadlock, since _readyPromise's own resolution chain is
   // what calls this.
+  //
+  // LUT_PAD works around a real niivue bug (confirmed against @niivue/niivue
+  // 0.69.0's fragOrientShader, and still unfixed on niivue's main branch —
+  // github.com/niivue/niivue issue #1578 / PR #1579): the shader clamps its
+  // normalized texture lookup to a minimum of 2/256, a threshold sized for
+  // legacy 256-entry colormaps. Our label texture has 433 entries (one per
+  // atlas region), so that clamp shifts every background voxel's (id 0)
+  // lookup to land on real region id~3's color instead of the transparent
+  // entry we set for id 0 — confirmed by direct inspection: the LUT itself
+  // is correct (id 0 -> [0,0,0,0]) but the rendered background pixel wasn't
+  // transparent. Padding the front of the index range with extra transparent
+  // entries pushes id 0's normalized position above the clamp threshold, so
+  // the shader samples the real (transparent) entry instead of the padding
+  // zone the bug reads from. 16 is comfortably above the ~3-entry minimum
+  // the math requires for this atlas's size.
   _applyRegionValues(map) {
+    const LUT_PAD = 16;
     const entries = Object.entries(map ?? {}).map(([id, v]) => [Number(id), Number(v)]);
     const scale = entries.reduce((max, [, v]) => Math.max(max, Math.abs(v)), 0) || 1;
     const lut = new Map(entries);
 
-    const n = this._atlasMaxId + 1; // indices 0..max, inclusive
-    const R = new Array(n).fill(0);
-    const G = new Array(n).fill(0);
-    const B = new Array(n).fill(0);
-    const A = new Array(n).fill(0); // no data => fully transparent => T1 shows through
+    const n = this._atlasMaxId + 1; // real indices 0..max, inclusive
+    const total = n + LUT_PAD;
+    const R = new Array(total).fill(0);
+    const G = new Array(total).fill(0);
+    const B = new Array(total).fill(0);
+    const A = new Array(total).fill(0); // no data => fully transparent => T1 shows through
     for (let id = 0; id <= this._atlasMaxId; id++) {
       const value = lut.get(id);
       if (value === undefined) continue;
       const [r, g, b] = divergingRGB(value, scale);
-      R[id] = r;
-      G[id] = g;
-      B[id] = b;
-      A[id] = Math.round(this.atlasOpacity * 255);
+      const i = id + LUT_PAD;
+      R[i] = r;
+      G[i] = g;
+      B[i] = b;
+      A[i] = Math.round(this.atlasOpacity * 255);
     }
 
-    this._atlasLayer.setColormapLabel({ R, G, B, A, I: [...Array(n).keys()] });
+    const I = Array.from({ length: total }, (_, i) => i - LUT_PAD);
+    this._atlasLayer.setColormapLabel({ R, G, B, A, I });
     this.nv.updateGLVolume();
   }
 

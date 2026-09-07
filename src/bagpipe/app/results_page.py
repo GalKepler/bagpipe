@@ -135,6 +135,7 @@ $importmap
 </section>
 
 <script id="regional-zscores" type="application/json">$regional_zscores_json</script>
+<script id="regional-bag" type="application/json">$regional_bag_json</script>
 <script type="module" src="/static/js/brain-viewers-panel.js"></script>
 
 <section aria-labelledby="brainmap-heading" id="brainmap">
@@ -215,6 +216,7 @@ $importmap
       </label>
       <span class="explorer__count" data-explorer-count></span>
     </div>
+    <p class="explorer__note" data-explorer-note hidden></p>
     <div class="explorer__list" data-explorer-list></div>
   </div>
   $ranking_figure
@@ -431,6 +433,7 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
         ranking_figure=ranking_figure,
         n_regions=len(gm_scores) or len({s.label for s in scores}),
         regional_zscores_json=json.dumps(zscores),
+        regional_bag_json=json.dumps(prediction.get("regional_bag") or {}),
         volume_unavailable_note=volume_unavailable_note,
         volume_available_attr="true" if volume_available else "false",
         job_id=job_id,

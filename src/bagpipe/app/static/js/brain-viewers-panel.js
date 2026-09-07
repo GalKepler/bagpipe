@@ -56,6 +56,7 @@ function init() {
 
   const cortexViewer = new CortexViewer(root.querySelector("[data-bv-cortex-stage]"), {
     glbUrl: "/static/mesh/cortex.glb",
+    interactive: true, // drag-to-rotate — this panel is persistent, not a scroll-hero
   });
   wireHover(cortexViewer, root.querySelector("[data-bv-cortex-hover]"), root, "cortex");
 
@@ -84,8 +85,6 @@ function init() {
   } else if (opacityInput && !volumeAvailable) {
     opacityInput.closest("[data-bv-opacity-row]")?.setAttribute("hidden", "");
   }
-
-  wireScrollRotation(cortexViewer, root);
 }
 
 function wireTabs(root) {
@@ -151,20 +150,6 @@ function wireHover(viewer, labelEl, root, which) {
     const named = hoveredId == null ? null : names[hoveredId];
     if (named) selectRegion(named.label, SOURCE);
   });
-}
-
-const REDUCED_MOTION = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-
-function wireScrollRotation(cortexViewer, root) {
-  if (REDUCED_MOTION) return;
-  function onScroll() {
-    const rect = root.getBoundingClientRect();
-    const viewport = window.innerHeight || document.documentElement.clientHeight;
-    const t = 1 - Math.min(1, Math.max(0, rect.top / viewport));
-    cortexViewer.setScrollProgress(t);
-  }
-  window.addEventListener("scroll", onScroll, { passive: true });
-  onScroll();
 }
 
 if (document.readyState === "loading") {
