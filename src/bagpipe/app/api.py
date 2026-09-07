@@ -31,6 +31,7 @@ import json
 import logging
 import re
 import shutil
+import time
 import uuid
 from pathlib import Path
 
@@ -197,7 +198,7 @@ def predict(
         raise
 
     work_dir = job_dir / "run"
-    process_job(
+    result = process_job(
         job_id,
         str(upload_path),
         sex,
@@ -206,8 +207,36 @@ def predict(
         retain_uploads=retain_uploads,
         chronological_age=age,
     )
+    # ponytail: huey's task table has occasionally lost a job between enqueue
+    # and execution under heavy host CPU load (observed 2026-09-06/07), with
+    # no error anywhere — leaves the job stuck "queued" forever. Recording
+    # the task id here lets job_status() tell "still queued" apart from
+    # "silently dropped" instead of polling blind. Root cause not found; if
+    # it recurs once host load is normal, revisit huey's Sqlite consumer.
+    (job_dir / "task_id").write_text(result.id)
 
     return JSONResponse({"job_id": job_id}, status_code=202)
+
+
+_ORPHAN_GRACE_SECONDS = 300
+
+
+def _job_task_lost(job_dir: Path) -> bool:
+    """True if this job's huey task is no longer queued (dequeued or gone)
+    and enough time has passed since submission that it should have written
+    a manifest by now if it were actually executing — `run_manifest`'s first
+    action is a `mkdir`, so a real in-flight job leaves a trace almost
+    instantly. `task_id` missing (jobs created before this check existed)
+    always reads as "still queued" — no way to check those retroactively.
+    """
+    task_id_path = job_dir / "task_id"
+    if not task_id_path.exists():
+        return False
+    if time.time() - task_id_path.stat().st_mtime < _ORPHAN_GRACE_SECONDS:
+        return False
+    task_id = task_id_path.read_text().strip()
+    still_pending = any(t.id == task_id for t in huey.pending())
+    return not still_pending
 
 
 @app.get("/jobs/{job_id}")
@@ -225,9 +254,22 @@ async def job_status(job_id: str) -> JSONResponse:
     job_dir = _uploads_root() / job_id
     manifest_path = job_dir / "run" / "manifest.json"
     if not manifest_path.exists():
-        if job_dir.is_dir():
-            return JSONResponse({"job_id": job_id, "status": "queued", "stages": []})
-        raise HTTPException(status_code=404, detail="unknown or not-yet-started job")
+        if not job_dir.is_dir():
+            raise HTTPException(status_code=404, detail="unknown or not-yet-started job")
+        if _job_task_lost(job_dir):
+            return JSONResponse(
+                {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "stages": [],
+                    "error": {
+                        "user_message": (
+                            "Job was lost before processing could start. Please try again."
+                        )
+                    },
+                }
+            )
+        return JSONResponse({"job_id": job_id, "status": "queued", "stages": []})
 
     manifest = json.loads(manifest_path.read_text())
     response: dict = {"job_id": job_id, "status": manifest["status"], "stages": manifest["stages"]}

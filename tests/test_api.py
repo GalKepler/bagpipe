@@ -6,6 +6,8 @@ upload handling, job_id issuance, and manifest -> response translation.
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
@@ -39,7 +41,15 @@ def test_predict_enqueues_and_returns_job_id(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)  # uploads_dir
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -88,6 +98,49 @@ def test_job_status_queued_before_manifest_exists(tmp_path, monkeypatch):
     body = client.get(f"/jobs/{JOB1}").json()
 
     assert body == {"job_id": JOB1, "status": "queued", "stages": []}
+
+
+def test_job_status_still_queued_if_task_still_pending(tmp_path, monkeypatch):
+    """task_id recorded, old enough to clear the grace window, but huey
+    still reports it pending — a real queued-behind-another-job wait, not a
+    lost task. Must stay 'queued'.
+    """
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    job_dir = tmp_path / JOB1
+    job_dir.mkdir(parents=True)
+    (job_dir / "task_id").write_text("task-1")
+    old = time.time() - api._ORPHAN_GRACE_SECONDS - 60
+    os.utime(job_dir / "task_id", (old, old))
+
+    class _PendingTask:
+        id = "task-1"
+
+    monkeypatch.setattr(api.huey, "pending", lambda: [_PendingTask()])
+
+    client = TestClient(api.app)
+    body = client.get(f"/jobs/{JOB1}").json()
+
+    assert body["status"] == "queued"
+
+
+def test_job_status_failed_if_task_lost(tmp_path, monkeypatch):
+    """task_id recorded, grace window elapsed, and huey no longer has the
+    task pending (dequeued or silently dropped — see api.py's `_job_task_lost`
+    docstring). Must report 'failed' instead of spinning forever.
+    """
+    monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
+    job_dir = tmp_path / JOB1
+    job_dir.mkdir(parents=True)
+    (job_dir / "task_id").write_text("task-1")
+    old = time.time() - api._ORPHAN_GRACE_SECONDS - 60
+    os.utime(job_dir / "task_id", (old, old))
+    monkeypatch.setattr(api.huey, "pending", lambda: [])
+
+    client = TestClient(api.app)
+    body = client.get(f"/jobs/{JOB1}").json()
+
+    assert body["status"] == "failed"
+    assert "error" in body
 
 
 def test_job_status_succeeded_includes_result(tmp_path, monkeypatch):
@@ -192,7 +245,15 @@ def test_predict_rejects_when_turnstile_configured_and_missing_token(tmp_path, m
         lambda: {"app": {"turnstile_secret_key": "secret", "max_queue_depth": 5}},
     )
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -214,7 +275,15 @@ def test_predict_accepts_when_turnstile_verifies(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(api.turnstile, "verify", lambda *a, **kw: True)
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -231,7 +300,15 @@ def test_predict_rejects_when_queue_full(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {"max_queue_depth": 0}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -248,7 +325,15 @@ def test_predict_neutralizes_traversal_filename(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -271,7 +356,15 @@ def test_predict_rejects_oversize_upload_and_cleans_up(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {"max_upload_size_mb": 1}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     oversize_body = b"x" * (2 * 1024 * 1024)  # 2 MiB > the 1 MB cap above
@@ -291,7 +384,15 @@ def test_predict_rejects_bad_extension(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -308,7 +409,15 @@ def test_predict_rejects_bad_sex(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -325,7 +434,15 @@ def test_predict_rejects_age_below_range(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -342,7 +459,15 @@ def test_predict_rejects_age_above_range(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     resp = client.post(
@@ -359,7 +484,15 @@ def test_predict_accepts_boundary_ages(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "get_path", lambda key: tmp_path)
     monkeypatch.setattr(api, "load_config", lambda: {"app": {}})
     calls = []
-    monkeypatch.setattr(api, "process_job", lambda *a, **kw: calls.append((a, kw)))
+
+    class _FakeResult:
+        id = "fake-task-id"
+
+    def _fake_process_job(*a, **kw):
+        calls.append((a, kw))
+        return _FakeResult()
+
+    monkeypatch.setattr(api, "process_job", _fake_process_job)
 
     client = TestClient(api.app)
     for age in ("18", "90"):
