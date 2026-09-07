@@ -46,3 +46,9 @@ app:
   max_queue_depth: 5          # reject new /predict with 503 once this many jobs are pending
   max_upload_size_mb: 100   # Cloudflare free plan rejects bodies >100MB at the edge; keep at or below that so the user gets our 413, not theirs
   public_base_url: https://bagpipe.example.org   # external origin (your Cloudflare Tunnel hostname); omit for local dev
+
+  # Report prose (bagpipe.app.narrative). Unset = the deterministic template
+  # narrative, which is what ships today; `_llm_narrative` is a stub that
+  # returns None until a provider is wired here. See docs/report_contents.md
+  # §4 for what may and may not be sent in the prompt.
+  narrative: null

@@ -36,7 +36,10 @@ def test_fit_region_correctors_stores_one_per_region_and_flattens_bias():
     region_mapping = {"atlasA__r1": [0, 1], "atlasA__r2": [2, 3]}
     model = TIVSexAdjustedRegressor(
         lambda: RegionalStackingRegressor(
-            region_mapping=region_mapping, base_estimator=Ridge(), meta_estimator=Ridge(), outer_cv=3
+            region_mapping=region_mapping,
+            base_estimator=Ridge(),
+            meta_estimator=Ridge(),
+            outer_cv=3,
         )
     )
     model.fit(X, y)

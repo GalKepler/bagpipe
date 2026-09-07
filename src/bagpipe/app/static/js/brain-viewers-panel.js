@@ -8,8 +8,10 @@
 
 import { VolumeViewer } from "./volume-viewer.js";
 import { CortexViewer } from "./cortex-viewer.js";
+import { loadRegionNames, selectRegion } from "./region-bus.js";
 
 const ATLAS_PREFIX = "Schaefer2018N400n7Tian2020S2";
+const SOURCE = "brain3d";
 
 function readJsonScript(id) {
   const el = document.getElementById(id);
@@ -49,13 +51,13 @@ function init() {
       t1Url: `/jobs/${jobId}/volume/t1.nii`,
       atlasUrl: "/atlas/volume.nii",
     });
-    wireHover(volumeViewer, root.querySelector("[data-bv-volume-hover]"));
+    wireHover(volumeViewer, root.querySelector("[data-bv-volume-hover]"), root, "volume");
   }
 
   const cortexViewer = new CortexViewer(root.querySelector("[data-bv-cortex-stage]"), {
     glbUrl: "/static/mesh/cortex.glb",
   });
-  wireHover(cortexViewer, root.querySelector("[data-bv-cortex-hover]"));
+  wireHover(cortexViewer, root.querySelector("[data-bv-cortex-hover]"), root, "cortex");
 
   let manifest = null;
   let currentTissue = "vol_gm";
@@ -107,11 +109,47 @@ function wireToggleGroup(buttons, onSelect) {
   });
 }
 
-function wireHover(viewer, labelEl) {
+// Hovering the 3D brain used to read out "Region 217". Both viewers key on
+// the atlas ROIid, and region_names.json is indexed by atlas label, so the
+// manifests bridge the two — the same join the brain map already does.
+async function buildIdToName() {
+  const [manifest, names] = await Promise.all([loadManifest(), loadRegionNames()]);
+  const byId = {};
+  for (const [id, meta] of Object.entries(manifest)) {
+    const named = names.regions[meta.label];
+    if (named) byId[id] = { display: named.display, label: meta.label };
+  }
+  return byId;
+}
+
+let idToNamePromise = null;
+
+function wireHover(viewer, labelEl, root, which) {
   if (!labelEl) return;
+  idToNamePromise ??= buildIdToName();
+  let names = {};
+  let hoveredId = null;
+  idToNamePromise.then((map) => {
+    names = map;
+  });
+
   viewer.addEventListener("regionhover", (e) => {
-    const id = e.detail.regionId;
-    labelEl.textContent = id == null ? " " : `Region ${id}`;
+    hoveredId = e.detail.regionId;
+    const named = hoveredId == null ? null : names[hoveredId];
+    labelEl.textContent = named
+      ? named.display
+      : hoveredId == null
+        ? " "
+        : `Region ${hoveredId}`;
+  });
+
+  // Clicking the anatomy selects it everywhere else on the page. The viewers
+  // expose hover but not click, so the stage element carries the click and
+  // the last hover says what was under the cursor — no viewer change needed.
+  const stage = root.querySelector(`[data-bv-${which}-stage]`);
+  stage?.addEventListener("click", () => {
+    const named = hoveredId == null ? null : names[hoveredId];
+    if (named) selectRegion(named.label, SOURCE);
   });
 }
 

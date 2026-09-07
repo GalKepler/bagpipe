@@ -1,9 +1,17 @@
-"""The interactive web results page (`GET /jobs/{job_id}/view`) — the
-"nicer than a static PDF" view of a finished job's prediction: headline BAG,
-global stats, and a clickable brain map (bagpipe.app.static.brainmap.js +
-static/atlas/*, generated once from the Schaefer400+TianS2 atlas the
-production model trains on). The emailed PDF (`bagpipe.app.report`) stays
-static/print-only; this is the richer, browser-only counterpart.
+"""The interactive web results page (`GET /jobs/{job_id}/view`).
+
+The richer counterpart to the emailed PDF (`bagpipe.app.report`): the same
+numbers, the same figures — both surfaces render `bagpipe.app.charts` and
+`bagpipe.app.narrative` — plus the three things a page can do that paper
+cannot. A clickable brain map and 3D viewers over the Schaefer400+TianS2
+atlas the production model trains on, and a searchable/groupable explorer
+across all 432 regions, all three sharing one selection through
+`static/js/region-bus.js`.
+
+Region names throughout are the anatomical ones from
+`static/atlas/region_names.json` (`scripts/build_region_names.py`), never the
+raw atlas labels — `LH_Vis_23` is a join key, not something to show a person
+reading about their own brain.
 """
 
 from __future__ import annotations
@@ -12,7 +20,9 @@ import json
 import math
 from string import Template
 
-from bagpipe.app.landing_page import gap_band_html
+from bagpipe.app import charts, region_names
+from bagpipe.app import narrative as narrative_mod
+from bagpipe.app.landing_page import CONTACT_EMAIL, gap_band_html
 from bagpipe.app.style import BASE_CSS, BRAIN_VIEWER_CSS, FAVICON_LINK, FONTS_LINK, RESULTS_CSS
 
 # unpkg pins for the 3D-viewer ES modules — cortex-viewer.js / volume-viewer.js
@@ -30,8 +40,18 @@ _IMPORTMAP = """<script type="importmap">
 }
 </script>"""
 
+_SECTIONS = [
+    ("summary", "Summary"),
+    ("meaning", "Explained"),
+    ("cohort", "Where you sit"),
+    ("brain3d", "3D brain"),
+    ("brainmap", "Brain map"),
+    ("networks", "Networks"),
+    ("regions", "Regions"),
+]
+
 _PAGE = Template("""<!doctype html>
-<html><head><meta charset="utf-8"><title>Brain Age Gap — results</title>
+<html lang="en"><head><meta charset="utf-8"><title>Brain Age Gap — results</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 $favicon_link
 $fonts_link
@@ -41,12 +61,12 @@ $importmap
 <div class="results-page">
 <a class="brand" href="/"><img src="/static/logo-icon-96.png" alt=""><span>Aevantis</span></a>
 
-<div class="results-head">
+<nav class="section-nav" aria-label="Sections of this report">$section_nav</nav>
+
+<div class="results-head" id="summary">
   <p class="muted">Your results</p>
   <h1>Brain Age Gap: $bag_sign$bag_value years
     <span class="results-head__uncertainty">&plusmn;$band_mae yrs</span></h1>
-  <p class="results-head__meta">Predicted brain age $predicted_age years &middot;
-    scan quality $siqr_pct% ($siqr_grade)</p>
   $gap_band
   <p class="results-head__caveat">For people around your predicted age ($band_label years),
     this model's typical error is &plusmn;$band_mae years$band_fallback_note, estimated
@@ -55,11 +75,30 @@ $importmap
   $out_of_range_note
 </div>
 
-<section aria-labelledby="brain3d-heading">
+<div class="results-summary">$summary_tiles</div>
+
+<section aria-labelledby="meaning-heading" id="meaning">
+  <div class="section-heading-row">
+    <h2 id="meaning-heading" class="section-heading">Your result, explained</h2>
+  </div>
+  <div class="narrative">$narrative_html
+    <p class="narrative__source">$narrative_source</p>
+  </div>
+</section>
+
+<section aria-labelledby="cohort-heading" id="cohort">
+  <div class="section-heading-row">
+    <h2 id="cohort-heading" class="section-heading">Where you sit</h2>
+    <p class="section-note">your result against the $cohort_n people this model was validated on</p>
+  </div>
+  <div class="chart-grid">$cohort_figures</div>
+</section>
+
+<section aria-labelledby="brain3d-heading" id="brain3d">
   <div class="section-heading-row">
     <h2 id="brain3d-heading" class="section-heading">3D brain</h2>
     <p class="section-note">GM/WM/CSF deviation from the SNBB cohort norm,
-      teal = younger-looking, amber = older-looking</p>
+      teal = below the norm, amber = above &middot; hover to name a region, click to select it</p>
   </div>
   <div class="brain-viewers" data-brain-viewers data-job-id="$job_id"
        data-volume-available="$volume_available_attr">
@@ -98,7 +137,7 @@ $importmap
 <script id="regional-zscores" type="application/json">$regional_zscores_json</script>
 <script type="module" src="/static/js/brain-viewers-panel.js"></script>
 
-<section aria-labelledby="brainmap-heading">
+<section aria-labelledby="brainmap-heading" id="brainmap">
   <div class="section-heading-row">
     <h2 id="brainmap-heading" class="section-heading">Brain map</h2>
     <p class="section-note">click a region for its GM/WM/CSF z-scores vs. the SNBB cohort norm</p>
@@ -143,9 +182,129 @@ $importmap
 </section>
 
 <script type="module" src="/static/brainmap.js"></script>
+
+<section aria-labelledby="networks-heading" id="networks">
+  <div class="section-heading-row">
+    <h2 id="networks-heading" class="section-heading">Network profile</h2>
+    <p class="section-note">the shape of your result in eight numbers instead of 432</p>
+  </div>
+  <div class="chart-grid">$network_figures</div>
+</section>
+
+<section aria-labelledby="regions-heading" id="regions">
+  <div class="section-heading-row">
+    <h2 id="regions-heading" class="section-heading">Regions</h2>
+    <p class="section-note">all $n_regions regions &middot; selecting one here highlights it on
+      the brain map above, and vice versa</p>
+  </div>
+  <div class="explorer" data-region-explorer>
+    <div class="explorer__controls">
+      <input type="search" class="explorer__search" data-explorer-search
+             placeholder="Search regions, networks, lobes…" aria-label="Search regions">
+      <div class="button-group" data-explorer-metric></div>
+      <label class="explorer__field">
+        <span class="explorer__field-label">Group by</span>
+        <select data-explorer-group aria-label="Group regions by"></select>
+      </label>
+      <label class="explorer__field">
+        <span class="explorer__field-label">Sort</span>
+        <select data-explorer-sort aria-label="Sort regions by"></select>
+      </label>
+      <label class="explorer__checkbox">
+        <input type="checkbox" data-explorer-outliers> only beyond &plusmn;2&sigma;
+      </label>
+      <span class="explorer__count" data-explorer-count></span>
+    </div>
+    <div class="explorer__list" data-explorer-list></div>
+  </div>
+  $ranking_figure
+</section>
+
+<footer class="results-footer">
+  <p><a href="/jobs/$job_id/report.pdf">Download this report as a PDF</a></p>
+  <p class="muted">This report provides information about your brain and how it compares to a
+    reference cohort. It is a wellness and informational report only, and is not intended to be
+    used or relied on for any other purpose. Questions — $contact_email.</p>
+</footer>
+
 </div>
+<script type="module" src="/static/js/region-explorer.js"></script>
 </body></html>
 """)
+
+_STAT_TILE = Template("""
+<div class="stat-tile">
+  <p class="stat-tile__label">$label</p>
+  <p class="stat-tile__value">$value</p>
+  <p class="stat-tile__note">$note</p>
+</div>""")
+
+
+def _summary_tiles(prediction: dict, qc_metrics: dict, band: dict) -> str:
+    """The four numbers a reader wants before any figure: what they told us,
+    what the model said, where that sits, and whether the scan was any good.
+    """
+    population = prediction.get("population") or {}
+    chronological = prediction.get("chronological_age")
+    percentile = population.get("bag_percentile")
+
+    tiles = [
+        (
+            "Your age",
+            f"{chronological:.0f}" if chronological is not None else "—",
+            "as reported at upload" if chronological is not None else "not provided",
+        ),
+        (
+            "Predicted brain age",
+            f"{prediction['predicted_age']:.1f}",
+            f"±{band['mae_corrected']:.1f} y typical error",
+        ),
+        (
+            "Cohort position",
+            charts.ordinal(percentile) if percentile is not None else "—",
+            (
+                f"percentile of {population.get('n', 0):,} people"
+                if percentile is not None
+                else "needs your age to place you"
+            ),
+        ),
+        (
+            "Scan quality",
+            f"{qc_metrics.get('siqr_pct', 'n/a')}%",
+            f"grade {qc_metrics.get('siqr_grade', 'n/a')}",
+        ),
+    ]
+    return "".join(
+        _STAT_TILE.substitute(label=label, value=value, note=note) for label, value, note in tiles
+    )
+
+
+def _figure(svg: str, caption: str) -> str:
+    """A chart with nothing to draw returns "" (`bagpipe.app.charts`), and an
+    empty framed card with a caption under it is worse than no section at
+    all — so the card only exists when the figure does."""
+    if not svg:
+        return ""
+    return (
+        f'<figure class="chart-card">{svg}'
+        f'<figcaption class="chart-card__caption">{caption}</figcaption></figure>'
+    )
+
+
+def _network_blurbs(rows: list[dict]) -> str:
+    """One sentence naming the most and least deviating network in plain
+    language — the chart's own axis labels are network names, and a reader
+    who has never met "salience / ventral attention" needs the gloss."""
+    if len(rows) < 2:
+        return ""
+    ordered = sorted(rows, key=lambda r: r["mean_z"])
+    lowest, highest = ordered[0], ordered[-1]
+    blurb = highest["blurb"].rstrip(".")
+    return (
+        f" Furthest above the norm here is {highest['display'].lower()} "
+        f"({blurb[0].lower() + blurb[1:]}); furthest below, "
+        f"{lowest['display'].lower()}."
+    )
 
 
 def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bool) -> str:
@@ -173,6 +332,7 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
         "mae_corrected": float("nan"),
         "is_fallback": True,
     }
+    band_mae = 5.0 if math.isnan(band["mae_corrected"]) else band["mae_corrected"]
     band_fallback_note = (
         " (too few validation subjects in your exact age band — showing the "
         "model's overall typical error instead)"
@@ -191,6 +351,66 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
             "with extra caution.</p>"
         )
 
+    zscores = prediction.get("regional_zscores", {})
+    scores = region_names.describe(zscores)
+    gm_scores = [s for s in scores if s.metric == "vol_gm"]
+    networks = region_names.by_network(scores)
+    population = prediction.get("population") or {}
+    palette = charts.DARK
+
+    narrative = narrative_mod.generate(prediction, qc_metrics)
+    narrative_source = (
+        f"Written from your results by {narrative.model}"
+        if narrative.source == "llm"
+        else "Generated from your results. Not written or reviewed by a clinician."
+    )
+
+    bag_distribution_svg = (
+        charts.bag_distribution(
+            population["bag_histogram"], bag, population.get("bag_percentile"), palette
+        )
+        if population.get("bag_histogram")
+        else ""
+    )
+    cohort_figures = _figure(
+        bag_distribution_svg,
+        "Every person in the reference cohort has a gap of their own — most are within a few "
+        "years of zero. Your bin is the highlighted one. A gap only means something relative "
+        "to this spread.",
+    ) + _figure(
+        charts.calibration(
+            population.get("calibration", []),
+            prediction.get("chronological_age"),
+            prediction["predicted_age"],
+            palette,
+        ),
+        "How the model behaves across ages. The shaded band holds the middle 80% of the "
+        "cohort's predictions at each age; the dashed diagonal is a perfect prediction. The "
+        "band widens and the median flattens with age — the model pulls predictions toward the "
+        "middle of its training range, which is why an older reader's result carries more "
+        "uncertainty.",
+    )
+
+    network_figures = _figure(
+        charts.network_profile(networks, palette),
+        "Each bar averages dozens of regions belonging to one functional network, which makes "
+        "it far steadier than any single region's value. Note the axis: network means live in a "
+        "much narrower range than individual regions do." + _network_blurbs(networks),
+    ) + _figure(
+        charts.zscore_spread(gm_scores, palette),
+        "Your whole regional profile at once, against the bell curve you would get from chance "
+        "alone. Measure hundreds of things and some land beyond two standard deviations even in "
+        "a completely ordinary brain — this is the figure that says whether your outliers are "
+        "more than that.",
+    )
+
+    ranking_figure = _figure(
+        charts.deviation_ranking(region_names.top_deviations(scores, n=10), palette),
+        "The ten regions furthest from the reference norm, for gray matter. Anything inside the "
+        "shaded band is within the range two thirds of the cohort falls in — a region topping "
+        "this list is not by itself a finding.",
+    )
+
     return _PAGE.substitute(
         favicon_link=FAVICON_LINK,
         fonts_link=FONTS_LINK,
@@ -198,21 +418,26 @@ def render(prediction: dict, qc_metrics: dict, job_id: str, volume_available: bo
         base_css=BASE_CSS,
         results_css=RESULTS_CSS,
         brain_viewer_css=BRAIN_VIEWER_CSS,
+        section_nav="".join(f'<a href="#{slug}">{name}</a>' for slug, name in _SECTIONS),
         bag_sign="+" if bag >= 0 else "",
         bag_value=f"{bag:.1f}",
-        gap_band=gap_band_html(
-            bag, 5.0 if math.isnan(band["mae_corrected"]) else band["mae_corrected"]
-        ),
-        predicted_age=f"{prediction['predicted_age']:.1f}",
-        siqr_pct=qc_metrics.get("siqr_pct", "n/a"),
-        siqr_grade=qc_metrics.get("siqr_grade", "n/a"),
-        regional_zscores_json=json.dumps(prediction["regional_zscores"]),
+        gap_band=gap_band_html(bag, band_mae),
+        summary_tiles=_summary_tiles(prediction, qc_metrics, {**band, "mae_corrected": band_mae}),
+        narrative_html=narrative_mod.sections_html(narrative),
+        narrative_source=narrative_source,
+        cohort_n=f"{population.get('n', 0):,}",
+        cohort_figures=cohort_figures,
+        network_figures=network_figures,
+        ranking_figure=ranking_figure,
+        n_regions=len(gm_scores) or len({s.label for s in scores}),
+        regional_zscores_json=json.dumps(zscores),
         volume_unavailable_note=volume_unavailable_note,
         volume_available_attr="true" if volume_available else "false",
         job_id=job_id,
         band_label=band["label"],
         band_n=band["n"],
-        band_mae=f"{band['mae_corrected']:.1f}",
+        band_mae=f"{band_mae:.1f}",
         band_fallback_note=band_fallback_note,
         out_of_range_note=out_of_range_note,
+        contact_email=CONTACT_EMAIL,
     )

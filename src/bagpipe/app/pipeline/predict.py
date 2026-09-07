@@ -15,6 +15,12 @@ age-dependent — MAE roughly triples from the 18-30 band to the 70-90 band on
 the model's own held-out `predictions` rows. `_band_mae` recomputes this
 per age band from those same rows at request time (never hardcoded), so the
 reported uncertainty always tracks whichever model is currently promoted.
+
+The same rows also produce the cohort-context figures the report plots the
+reader against (`_population_context`). Those are deliberately aggregate —
+histogram counts, per-age-bin percentiles over >= MIN_BAND_N subjects — since
+the reference cohort is real SNBB data and this payload is served to a public
+browser.
 """
 
 from __future__ import annotations
@@ -131,6 +137,130 @@ def _band_mae(rows: list[Prediction], age: float) -> dict[str, float | int | str
     return overall
 
 
+# Cohort-context figures (`bagpipe.app.charts`) are computed here, from the
+# same held-out `predictions` rows as the corrector and the band MAE, and
+# they are AGGREGATE ONLY — histogram counts and per-bin percentiles, never
+# per-subject rows. The reference cohort is real SNBB data and this payload
+# is served to a public browser, so nothing that resolves to an individual
+# (an age paired with a prediction, a subject count of one) may enter it.
+# See CLAUDE.md's hard constraints.
+BAG_HIST_BINS = 28
+CALIBRATION_BIN_YEARS = 5.0
+
+
+def _cohort_bag(rows: list[Prediction]) -> np.ndarray:
+    """The cohort's own corrected brain age gaps — the distribution a
+    reader's number is only interpretable against."""
+    return np.array([r.predicted_age_corrected - r.age_true for r in rows])
+
+
+def _pool_sparse_bins(edges: list[float], counts: list[int]) -> tuple[list[float], list[int]]:
+    """Merge any bin holding between 1 and `MIN_BAND_N - 1` subjects into a
+    neighbour, until every published bin is either empty or holds at least
+    `MIN_BAND_N`.
+
+    Without this, a tail bin containing a single held-out subject publishes
+    exactly what the aggregate-only contract forbids: that one person's brain
+    age gap, localised to that bin's width. Merging rather than zeroing keeps
+    the distribution honest — the subjects stay in the total, the bin just
+    gets wide enough to stop describing an individual. (Empty bins are left
+    alone; a count of zero discloses nothing.)
+    """
+    edges, counts = list(edges), list(counts)
+    while len(counts) > 1:
+        sparse = [i for i, c in enumerate(counts) if 0 < c < MIN_BAND_N]
+        if not sparse:
+            break
+        i = min(sparse, key=lambda i: counts[i])
+        # Merge into whichever neighbour is itself smaller, so pooling grows
+        # the thin tails instead of eating into the dense middle.
+        if i == 0:
+            j = 1
+        elif i == len(counts) - 1:
+            j = i - 1
+        else:
+            j = i - 1 if counts[i - 1] <= counts[i + 1] else i + 1
+        lo, hi = min(i, j), max(i, j)
+        counts[lo] = counts[lo] + counts[hi]
+        del counts[hi]
+        del edges[hi]  # drop the edge between the two merged bins
+    return edges, counts
+
+
+def _bag_histogram(bag: np.ndarray) -> dict:
+    """Distribution of the cohort's gaps over a robust range (99th percentile
+    of |gap|, symmetric about zero) so one extreme validation subject can't
+    squash the shape the reader is being placed in, with sparse bins pooled
+    (`_pool_sparse_bins`) so no bin describes an individual.
+
+    Bins are therefore NOT uniform-width after pooling — `charts.bag_distribution`
+    draws density (count / bin width), not raw count.
+    """
+    limit = float(max(np.percentile(np.abs(bag), 99), 1.0))
+    edges = np.linspace(-limit, limit, BAG_HIST_BINS + 1)
+    counts, _ = np.histogram(np.clip(bag, edges[0], edges[-1]), bins=edges)
+
+    pooled_edges, pooled_counts = _pool_sparse_bins(
+        [float(e) for e in edges], [int(c) for c in counts]
+    )
+    # A cohort too small to fill even one bin has no publishable distribution.
+    if not any(c >= MIN_BAND_N for c in pooled_counts):
+        return {"edges": [], "counts": []}
+    return {
+        "edges": [round(e, 3) for e in pooled_edges],
+        "counts": pooled_counts,
+    }
+
+
+def _calibration_bands(rows: list[Prediction]) -> list[dict]:
+    """Per age bin: how the cohort's predictions are actually distributed.
+
+    Bins with fewer than `MIN_BAND_N` subjects are dropped rather than
+    plotted — both because a decile from n<10 is noise, and because a
+    thinly-populated bin's percentiles start to describe individuals.
+    """
+    age_true = np.array([r.age_true for r in rows])
+    predicted = np.array([r.predicted_age_corrected for r in rows])
+    lo = float(np.floor(age_true.min() / CALIBRATION_BIN_YEARS) * CALIBRATION_BIN_YEARS)
+    hi = float(np.ceil(age_true.max() / CALIBRATION_BIN_YEARS) * CALIBRATION_BIN_YEARS)
+
+    bands = []
+    edge = lo
+    while edge < hi:
+        mask = (age_true >= edge) & (age_true < edge + CALIBRATION_BIN_YEARS)
+        n = int(mask.sum())
+        if n >= MIN_BAND_N:
+            values = predicted[mask]
+            bands.append(
+                {
+                    "age_lo": edge,
+                    "age_hi": edge + CALIBRATION_BIN_YEARS,
+                    "n": n,
+                    "median": float(np.median(values)),
+                    "p10": float(np.percentile(values, 10)),
+                    "p90": float(np.percentile(values, 90)),
+                }
+            )
+        edge += CALIBRATION_BIN_YEARS
+    return bands
+
+
+def _population_context(rows: list[Prediction], user_bag: float | None) -> dict:
+    """Everything the report needs to say "and here is where that sits"."""
+    bag = _cohort_bag(rows)
+    percentile = None
+    if user_bag is not None:
+        percentile = float((bag < user_bag).mean() * 100.0)
+    return {
+        "n": len(rows),
+        "bag_mean": float(bag.mean()),
+        "bag_sd": float(bag.std(ddof=1)),
+        "bag_percentile": percentile,
+        "bag_histogram": _bag_histogram(bag),
+        "calibration": _calibration_bands(rows),
+    }
+
+
 class PredictStage:
     name = "predict"
 
@@ -198,6 +328,12 @@ class PredictStage:
         norms = fit_norms_cached(tuple(region_columns), datasets_dir)
         zscores = regional_zscores(features, norms, age=corrected, sex=sex_code, tiv=tiv)
 
+        chronological_age = manifest.input.chronological_age
+        bag_corrected = corrected - (chronological_age or corrected)
+        population = _population_context(
+            pred_rows, bag_corrected if chronological_age is not None else None
+        )
+
         out_dir = workspace / "predict"
         out_dir.mkdir(exist_ok=True)
         out_path = out_dir / "prediction.json"
@@ -205,13 +341,16 @@ class PredictStage:
             json.dumps(
                 {
                     "predicted_age": corrected,
-                    "bag_raw": raw - (manifest.input.chronological_age or raw),
-                    "bag_corrected": corrected - (manifest.input.chronological_age or corrected),
+                    "bag_raw": raw - (chronological_age or raw),
+                    "bag_corrected": bag_corrected,
                     "predicted_age_raw": raw,
+                    "chronological_age": chronological_age,
+                    "sex": sex,
                     "regional_zscores": zscores,
                     "age_band": band,
                     "age_out_of_range": age_out_of_range,
                     "training_support": support,
+                    "population": population,
                 }
             )
         )
@@ -226,6 +365,7 @@ class PredictStage:
                 "age_band_n": band["n"],
                 "age_band_mae_corrected": band["mae_corrected"],
                 "age_out_of_range": age_out_of_range,
+                "bag_percentile": population["bag_percentile"],
             },
             warnings=warnings,
         )
