@@ -216,3 +216,81 @@ def test_fit_norms_cached_hits_cache_on_repeat_call(monkeypatch):
     assert calls["n"] == 1  # second call served from cache, not recomputed
     assert first == second
     normative.fit_norms_cached.cache_clear()
+
+
+# --------------------------------------------------------------------------
+# Cohort-context block (`_population_context`) — the aggregate figures the
+# report plots the reader against. The privacy contract matters as much as
+# the arithmetic: this payload is served to a public browser, so it must
+# never carry a per-subject row (CLAUDE.md hard constraints).
+# --------------------------------------------------------------------------
+def test_population_context_is_aggregate_only():
+    context = predict._population_context(_PRED_ROWS, 1.0)
+    assert set(context) == {
+        "n",
+        "bag_mean",
+        "bag_sd",
+        "bag_percentile",
+        "bag_histogram",
+        "calibration",
+    }
+    assert set(context["bag_histogram"]) == {"edges", "counts"}
+    assert all(isinstance(c, int) for c in context["bag_histogram"]["counts"])
+    for band in context["calibration"]:
+        assert set(band) == {"age_lo", "age_hi", "n", "median", "p10", "p90"}
+
+
+def test_population_context_percentile_places_the_reader():
+    # _PRED_ROWS' corrected gaps are 1.0 (the twelve 20s rows) plus 4.0 and
+    # 5.0 (the two 70s rows), so a reader above all of them is at 100.
+    assert predict._population_context(_PRED_ROWS, 9.0)["bag_percentile"] == pytest.approx(100.0)
+    assert predict._population_context(_PRED_ROWS, -5.0)["bag_percentile"] == pytest.approx(0.0)
+    assert predict._population_context(_PRED_ROWS, 4.5)["bag_percentile"] == pytest.approx(
+        100 * 13 / 14
+    )
+
+
+def test_population_context_omits_the_percentile_without_a_reader_gap():
+    assert predict._population_context(_PRED_ROWS, None)["bag_percentile"] is None
+
+
+def test_calibration_bands_drop_thinly_populated_bins():
+    """A bin below MIN_BAND_N is both statistically meaningless and close to
+    describing individuals, so it is dropped entirely.
+
+    _PRED_ROWS' 5-year bins all fall below the threshold, which is the
+    degenerate case worth pinning: an empty calibration is a valid outcome
+    that every consumer has to survive (`charts.calibration` returns "" and
+    the report omits the figure), not something to paper over.
+    """
+    assert predict._calibration_bands(_PRED_ROWS) == []
+
+    dense = [_pred_row(31.0 + i * 0.1, 33.0 + i * 0.1, 32.0 + i * 0.1) for i in range(20)]
+    bands = predict._calibration_bands(dense)
+    assert [b["age_lo"] for b in bands] == [30.0]
+    assert bands[0]["n"] == 20
+    assert bands[0]["median"] == pytest.approx(32.95, abs=0.05)
+    assert bands[0]["p10"] < bands[0]["median"] < bands[0]["p90"]
+
+
+def test_bag_histogram_is_symmetric_and_conserves_the_cohort():
+    histogram = predict._bag_histogram(predict._cohort_bag(_PRED_ROWS))
+    edges = histogram["edges"]
+    assert len(edges) == predict.BAG_HIST_BINS + 1
+    assert edges[0] == pytest.approx(-edges[-1])
+    # Values are clipped into range, never dropped.
+    assert sum(histogram["counts"]) == len(_PRED_ROWS)
+
+
+def test_prediction_json_carries_the_population_block(tmp_path):
+    (tmp_path / "features").mkdir()
+    (tmp_path / "features" / "features.json").write_text(
+        '{"atlas__R1__vol_gm": 3.0, "atlas__R2__vol_gm": 4.0, "TIV": 1500.0}'
+    )
+    result = predict.PredictStage().run(tmp_path, _manifest(age=52.0))
+    payload = json.loads((tmp_path / "predict" / "prediction.json").read_text())
+
+    assert payload["chronological_age"] == 52.0
+    assert payload["bag_corrected"] == pytest.approx(2.0)  # corrected 54.0 - 52.0
+    assert payload["population"]["n"] == len(_PRED_ROWS)
+    assert result.metrics["bag_percentile"] == payload["population"]["bag_percentile"]

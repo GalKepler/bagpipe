@@ -454,6 +454,291 @@ RESULTS_CSS = """
   .brainmap__body { grid-template-columns: 1fr; }
   .brainmap__svg { flex-direction: column; }
 }
+
+/* ---- Sticky section nav ------------------------------------------------
+   The results page is now long enough that a reader who wants "the regions"
+   should not have to scroll past three figures to find them. */
+.section-nav {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 0.4em;
+  flex-wrap: wrap;
+  padding: 0.7em 0;
+  margin-bottom: 1.5em;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--line);
+}
+.section-nav a {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.7em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 0.35em 0.7em;
+  border-radius: 0.4em;
+  border: 1px solid transparent;
+}
+.section-nav a:hover { color: var(--bone); border-color: var(--line); }
+
+/* ---- Summary tiles ---------------------------------------------------- */
+.results-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5em, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 0.75em;
+  overflow: hidden;
+  margin: 1.5em 0;
+}
+.stat-tile { background: var(--surface); padding: 1em 1.1em; }
+.stat-tile__label {
+  margin: 0 0 0.35em;
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.65em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.stat-tile__value {
+  margin: 0;
+  font-family: 'Geist Mono', monospace;
+  font-size: 1.5em;
+  font-weight: 400;
+  line-height: 1.1;
+}
+.stat-tile__note { margin: 0.3em 0 0; font-size: 0.75em; color: var(--muted); }
+
+/* ---- Figures ----------------------------------------------------------
+   Charts come from bagpipe.app.charts as inline SVG, already carrying the
+   dark palette's colors; the card is just the frame and the caption. */
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0.75em;
+  padding: 1.1em 1.2em 0.9em;
+  margin-bottom: 1.25em;
+}
+.chart-card .chart { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-card__caption {
+  margin: 0.8em 0 0;
+  color: var(--muted);
+  font-size: 0.85em;
+  line-height: 1.5;
+  max-width: 68ch;
+}
+.chart-grid { display: grid; gap: 1.25em; grid-template-columns: 1fr; }
+
+/* ---- Narrative prose (bagpipe.app.narrative) -------------------------- */
+.narrative {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--bone);
+  border-radius: 0.75em;
+  padding: 1.4em 1.5em;
+  margin-bottom: 1.5em;
+}
+.narrative__block + .narrative__block { margin-top: 1.4em; }
+.narrative__heading {
+  margin: 0 0 0.5em;
+  font-family: 'Instrument Sans', sans-serif;
+  font-weight: 500;
+  font-size: 0.95em;
+  letter-spacing: 0.01em;
+}
+.narrative p { margin: 0 0 0.7em; max-width: 68ch; line-height: 1.6; font-size: 0.95em; }
+.narrative p:last-child { margin-bottom: 0; }
+.narrative__source {
+  margin-top: 1.4em;
+  padding-top: 0.8em;
+  border-top: 1px solid var(--line);
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.7em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---- Region explorer (static/js/region-explorer.js) -------------------
+   BASE_CSS styles every `button` as a bone-filled CTA and every `label` as a
+   block with top margin (the upload form's needs). The explorer is built out
+   of the same elements used as list rows and inline controls, so it resets
+   those first rather than fighting them rule by rule. */
+.explorer { display: grid; gap: 1em; margin-bottom: 2em; }
+.explorer button, .explorer label { margin: 0; }
+.explorer button { min-height: 0; font-weight: 400; transition: background-color 120ms ease; }
+.explorer input, .explorer select { margin-top: 0; }
+.explorer__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6em 0.9em;
+  align-items: center;
+}
+.explorer__search {
+  flex: 1 1 14em;
+  width: auto;
+  min-width: 12em;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0.4em;
+  color: var(--bone);
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.9em;
+  padding: 0.55em 0.8em;
+}
+.explorer__search:focus { outline: none; border-color: var(--bone); }
+.explorer__field { display: inline-flex; align-items: center; gap: 0.4em; }
+.explorer__field-label,
+.explorer__checkbox {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.68em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.explorer__field select {
+  width: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 0.4em;
+  color: var(--bone);
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.85em;
+  padding: 0.4em 1.8em 0.4em 0.6em;
+}
+.explorer__checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  cursor: pointer;
+  text-transform: none;   /* "±2σ" must not be uppercased into "±2Σ" */
+}
+.explorer__count { font-family: 'Geist Mono', monospace; font-size: 0.72em; color: var(--muted); }
+.explorer__list {
+  max-height: 34em;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 0.75em;
+  background: var(--surface);
+}
+.explorer__empty { color: var(--muted); font-size: 0.9em; padding: 1.5em; margin: 0; }
+
+.region-group + .region-group { border-top: 1px solid var(--line); }
+.region-group__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7em;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--bone);
+  cursor: pointer;
+  padding: 0.7em 1em;
+  text-align: left;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+.region-group__head:hover { background: color-mix(in srgb, var(--bone) 6%, var(--surface)); }
+.region-group__caret { color: var(--muted); font-size: 0.8em; }
+.region-group__name {
+  font-family: 'Instrument Sans', sans-serif;
+  font-weight: 500;
+  font-size: 0.92em;
+  flex: 1 1 auto;
+}
+.region-group__stat {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.7em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.region-list { list-style: none; margin: 0; padding: 0; }
+.region-row + .region-row {
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+}
+.region-row.is-selected { background: color-mix(in srgb, var(--bone) 8%, var(--surface)); }
+.region-row__button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8.5em 7em 4.2em;
+  align-items: center;
+  gap: 0.8em;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--bone);
+  cursor: pointer;
+  padding: 0.5em 1em;
+  text-align: left;
+  font-family: 'Instrument Sans', sans-serif;
+  font-size: 0.88em;
+}
+.region-row__button:hover { background: color-mix(in srgb, var(--bone) 5%, transparent); }
+.region-row__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.region-row__approx {
+  margin-left: 0.4em;
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.7em;
+  color: var(--muted);
+}
+.region-row__meta {
+  font-size: 0.8em;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.region-row__bar { width: 100%; height: 12px; display: block; }
+.region-row__value {
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.82em;
+  text-align: right;
+}
+.region-row__detail { padding: 0 1em 0.9em 1em; }
+.region-row__detail-line { margin: 0 0 0.6em; color: var(--muted); font-size: 0.82em; }
+.region-row__chips { display: flex; flex-wrap: wrap; gap: 0.5em; }
+.region-row__chip {
+  display: inline-flex;
+  gap: 0.45em;
+  align-items: baseline;
+  background: var(--ground);
+  border: 1px solid var(--line);
+  border-radius: 0.4em;
+  padding: 0.3em 0.6em;
+}
+.region-row__chip-label { font-size: 0.75em; color: var(--muted); }
+.region-row__chip-value { font-family: 'Geist Mono', monospace; font-size: 0.78em; }
+
+.brainmap__detail-label {
+  margin: 0.9em 0 0;
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.7em;
+  color: var(--muted);
+}
+
+@media (max-width: 700px) {
+  .region-row__button { grid-template-columns: minmax(0, 1fr) 5.5em 4em; }
+  .region-row__meta { display: none; }
+}
+
+.results-footer {
+  margin-top: 3em;
+  padding-top: 1.2em;
+  border-top: 1px solid var(--line);
+  font-size: 0.85em;
+}
+.results-footer p { margin: 0 0 0.6em; max-width: 68ch; line-height: 1.6; }
+.results-footer a { color: var(--bone); }
+
+@media (prefers-reduced-motion: reduce) {
+  .region-row, .region-group__head { transition: none; }
+}
 """
 
 # The 3D surface (cortex-viewer.js) + volumetric (volume-viewer.js) pair now

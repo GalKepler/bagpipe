@@ -40,6 +40,9 @@ function severityFromZ(z) {
 // static/js/brand-tokens.js): cool = below norm, warm = above norm — the
 // only saturated colors on the page are ones reporting actual data.
 import { TOKENS, hexToRGB255 } from "./js/brand-tokens.js";
+import { loadRegionNames, onRegionSelect, selectRegion } from "./js/region-bus.js";
+
+const SOURCE = "brainmap";
 
 const DIVERGE_BREAKPOINTS = [-3, -1, 0, 1, 3];
 const DIVERGE_STOPS = [
@@ -111,11 +114,17 @@ function paintRegions(container, manifest, zscores, tissue, colorMode) {
 
 function renderDeviationLegend(legendEl) {
   legendEl.hidden = false;
+  // Built from zToColor's own stops rather than a hand-written gradient: the
+  // legend was a hardcoded blue-to-red ramp while the regions were painted
+  // teal-to-amber, so the key did not describe the map it belonged to.
+  const gradient = DIVERGE_BREAKPOINTS.map(
+    (z, i) => `${zToColor(z)} ${(i / (DIVERGE_BREAKPOINTS.length - 1)) * 100}%`
+  ).join(", ");
   legendEl.innerHTML = `
     <div class="colorbar">
       <div class="colorbar__row">
         <span class="colorbar__label">Below norm</span>
-        <div class="colorbar__track" style="background: linear-gradient(to right, rgb(28,92,171), rgb(134,182,239) 33.3%, rgb(217,213,197) 50%, rgb(235,169,159) 66.6%, rgb(171,58,69))"></div>
+        <div class="colorbar__track" style="background: linear-gradient(to right, ${gradient})"></div>
         <span class="colorbar__label">Above norm</span>
       </div>
       <div class="colorbar__ticks">
@@ -144,7 +153,7 @@ function renderLegend(legendEl, colorMode, atlas) {
     .join("");
 }
 
-function renderDetail(detailEl, meta, zscores) {
+function renderDetail(detailEl, meta, zscores, names) {
   const rows = METRICS.map(({ key, label }) => {
     const z = zscores[zKey(meta.label, key)];
     if (z === undefined) return "";
@@ -157,11 +166,22 @@ function renderDetail(detailEl, meta, zscores) {
     `;
   }).join("");
 
+  // The atlas label (`LH_Vis_23`) is a join key, not a name — show the
+  // anatomical name from region_names.json and keep the label only as the
+  // small print, for anyone matching this against the atlas itself.
+  const named = names?.regions?.[meta.label];
+  const title = named ? named.display : meta.label;
+  const network = named
+    ? names.networks[named.network]?.display || named.network
+    : meta.network;
+
   detailEl.innerHTML = `
-    <h3 class="brainmap__detail-title">${meta.label}</h3>
+    <h3 class="brainmap__detail-title">${title}</h3>
     <p class="brainmap__detail-network">${meta.hemisphere === "L" ? "Left" : "Right"} hemisphere
-      ${meta.network && meta.network !== "subcortex" ? "&middot; " + meta.network + " network" : ""}</p>
+      ${network ? "&middot; " + network : ""}
+      ${named && named.coverage < 0.6 ? "&middot; spans two areas" : ""}</p>
     ${rows || '<p class="brainmap__detail-placeholder">No z-score for this region.</p>'}
+    <p class="brainmap__detail-label">${meta.label}</p>
   `;
 }
 
@@ -170,6 +190,10 @@ function initBrainmap() {
   if (!root) return;
 
   const zscores = readJsonScript("regional-zscores");
+  let regionNames = null;
+  loadRegionNames().then((names) => {
+    regionNames = names;
+  });
   const svgContainer = root.querySelector("[data-brainmap-svg]");
   const detailEl = root.querySelector("[data-brainmap-detail]");
   const legendEl = root.querySelector("[data-brainmap-legend]");
@@ -208,17 +232,47 @@ function initBrainmap() {
     detailEl.innerHTML = '<p class="brainmap__detail-placeholder">Click a region to see its z-scores.</p>';
   }
 
+  async function select(meta, path) {
+    if (selectedPath) selectedPath.classList.remove("is-selected");
+    if (path) {
+      path.classList.add("is-selected");
+      selectedPath = path;
+    } else {
+      selectedPath = null;
+    }
+    renderDetail(detailEl, meta, zscores, regionNames);
+  }
+
   svgContainer.addEventListener("click", async (event) => {
     const path = event.target.closest('path[id^="region-"]');
     if (!path) return;
     const { manifest } = await loadAtlas(currentAtlas);
     const meta = manifest[path.id.replace("region-", "")];
     if (!meta) return;
+    await select(meta, path);
+    selectRegion(meta.label, SOURCE);
+  });
 
-    if (selectedPath) selectedPath.classList.remove("is-selected");
-    path.classList.add("is-selected");
-    selectedPath = path;
-    renderDetail(detailEl, meta, zscores);
+  // A region picked in the explorer (or the 3D viewer) has to be findable
+  // here even when it lives in the other atlas — switching to it is what a
+  // reader expects from clicking a subcortical row while the cortex is shown.
+  onRegionSelect(async ({ label, source }) => {
+    if (source === SOURCE) return;
+    const targetAtlas = label.includes("-lh") || label.includes("-rh") ? "subcortical" : "cortical";
+    if (targetAtlas !== currentAtlas) {
+      currentAtlas = targetAtlas;
+      atlasButtons.forEach((b) => b.classList.toggle("is-active", b.dataset.atlas === targetAtlas));
+      await render();
+    }
+    const { manifest } = await loadAtlas(currentAtlas);
+    const entry = Object.entries(manifest).find(([, meta]) => meta.label === label);
+    if (!entry) return;
+    const [index, meta] = entry;
+    // The parcel may not be on the currently-shown surface (a medial region
+    // while "Lateral" is selected); the detail panel still updates, which is
+    // the part carrying the numbers.
+    const path = svgContainer.querySelector(`path[id="region-${index}"]`);
+    await select(meta, path);
   });
 
   function wireToggle(buttons, onSelect) {

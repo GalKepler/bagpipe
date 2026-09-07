@@ -1079,6 +1079,109 @@ same PR.**
       latency for `surfextract` output the app never parses — a real win,
       but it needs a container rebuild and re-verify).*
 
+      *Update (2026-09-07): report richness/interactivity pass — the results
+      page and the emailed PDF are now one report rendered by shared code,
+      not a rich page plus a receipt. Full spec: `docs/report_contents.md`.
+
+      **Readable region names, derived not hand-written.** Every user-facing
+      surface showed raw atlas labels (`LH_Vis_23`, `pGP-lh`). New
+      `scripts/build_region_names.py` derives an anatomical name for each of
+      the 400 Schaefer parcels as the **modal Desikan-Killiany label over its
+      vertices** — `container/atlas/{lh,rh}.schaefer2018_400p_7n.annot` and
+      `{lh,rh}.aparc_DK40.freesurfer.annot` label the same 164k fsaverage
+      surface, so this needs no new input, no network access, and no
+      400-row hand-curated table to drift out of sync with the atlas (median
+      overlap 0.82; 93 parcels below 0.60 get a two-gyrus name and are
+      flagged `approx.` in the UI rather than presented as exact). The 32
+      Tian S2 subcortical labels are expanded from their documented
+      abbreviation scheme. Output `src/bagpipe/app/static/atlas/
+      region_names.json` is committed (atlas metadata, no subject data) and
+      read at runtime by `bagpipe.app.region_names` server-side and by the
+      three JS widgets browser-side — no nibabel at runtime. Display names
+      are numbered within (hemisphere, anatomy) so they're unique.
+
+      **Five figures, shared by both surfaces.** New `bagpipe.app.charts` —
+      pure functions returning inline SVG, palette passed in
+      (`DARK`/`PRINT`). Server-rendered deliberately: WeasyPrint has no JS,
+      so anything drawn client-side is a figure the PDF could never have,
+      and the two surfaces drifting apart is exactly what this prevents.
+      `bag_distribution` (cohort gap distribution, reader's bin
+      highlighted + percentile), `calibration` (predicted-vs-chronological
+      band per age bin — makes the model's age-dependent error *visible*
+      rather than asserted in a caveat), `network_profile` (Yeo-7 +
+      subcortex means, on their own narrow axis so a 57-parcel mean never
+      looks like a single parcel's z), `zscore_spread` (the reader's whole
+      regional profile against the standard normal — with 432 regions ~20
+      land beyond ±2σ by chance, and the overlay says so), and
+      `deviation_ranking` (diverging lollipops over a shaded ±1σ band,
+      replacing the old bare table of atlas labels).
+
+      **Cohort context, aggregate only.** `predict._population_context`
+      computes percentile / histogram / per-5-year-bin calibration from the
+      production model's own held-out `predictions` rows (same rows as the
+      Cole corrector and the band MAE, so they can't disagree), written into
+      `prediction.json` alongside the newly-persisted `chronological_age`.
+      **Deliberately aggregate**: the reference cohort is real SNBB data and
+      this payload is served to a public browser, so bins below
+      `MIN_BAND_N`=10 are dropped and no per-subject row — not even an
+      anonymous (age, prediction) pair — leaves the machine.
+
+      **Region explorer + shared selection.** New
+      `static/js/region-explorer.js`: search, group by network/lobe/
+      hemisphere, sort, filter to beyond ±2σ, per-row diverging bar drawn
+      against a fixed ±3σ axis with the ±1σ band shaded (so an ordinary
+      value looks ordinary, which a sorted list of numbers alone hides),
+      expandable rows showing every tissue metric. New
+      `static/js/region-bus.js` gives the explorer, the SVG brain map and
+      the 3D viewers one shared selection — clicking a region anywhere
+      selects it everywhere, with the brain map switching cortical/
+      subcortical atlas as needed and the explorer clearing a filter that
+      would hide what the reader just clicked. The 3D viewers' hover readout
+      now says "Left fusiform gyrus 1" instead of "Region 217", and a click
+      on the mesh selects.
+
+      **LLM prose hook.** New `bagpipe.app.narrative`: `generate()` behind
+      which `_llm_narrative` is the (unwired, returns `None`) LLM path and
+      `_template_narrative` is a deterministic generator that always runs —
+      a report should never ship an empty explanation box, and a rule-based
+      paragraph that is *correct* beats an eloquent one that is
+      unverifiable. `build_context()` is deliberately the entire future
+      prompt payload (derived stats + readable names; no imaging, no
+      identifiers, no raw features, no paths — there is a test asserting
+      this), `PROMPT_TEMPLATE` and `COPY_RULES` carry the wellness-not-
+      medical copy constraints, and the LLM path sits inside `generate`'s
+      try/except so a provider outage degrades the prose rather than failing
+      an hour-long job at its last stage. Rendered block is labelled with
+      its source.
+
+      **Three real bugs fixed along the way**: (1) `brainmap.js`'s deviation
+      legend was a hardcoded blue→red gradient while the regions themselves
+      were painted teal→amber — the key did not describe the map it belonged
+      to; now built from `zToColor`'s own stops. (2) The new results-page CSS
+      redefined `.prose`, which `BASE_CSS` already owns as the landing
+      page's narrow 34em text column — renamed to `.narrative` (the
+      narrative block was rendering as a 400px column mid-page). (3) A chart
+      with no data returns `""`, which used to leave an empty framed card
+      with a caption floating under it on both surfaces; both now emit the
+      whole figure or nothing.
+
+      Tests 129 → **168 passing** (`test_region_names.py`,
+      `test_charts.py`, `test_narrative.py`, `test_results_page.py` new;
+      `test_report.py` rewritten against real atlas columns and asserting
+      raw labels never reach the reader; `test_pipeline.py` extended with
+      the population-context privacy contract). Ruff clean on everything
+      touched (the 12 remaining repo-wide E501s are pre-existing, in
+      `models/`, `scripts/feature_ablation.py` and two model test files).
+      **Verified against a real browser**, not just string assertions:
+      Chromium/Playwright drives search → group → sort → outlier filter →
+      explorer-to-map selection (including the automatic cortex/subcortex
+      switch) → map-to-explorer selection → metric switch, with no page
+      errors; the PDF is rasterised and inspected page by page. **Not yet
+      verified against a real job**: everything here ran against a
+      synthetic `prediction.json`, since this session has no DB, no
+      promoted model and no CAT12 container — the first real upload after
+      deploy is still the thing that proves it end to end.*
+
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.
 
