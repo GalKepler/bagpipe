@@ -101,9 +101,15 @@ entirely into a normal-flow hero visual that scrolls away after one viewport
 `top: 15vh; height: min(60vh, 44vw)` (clear of the top edge, doesn't fill the
 whole viewport), releasing near the bottom of the page. Rotation is
 click-drag (three.js OrbitControls, wheel-zoom disabled so scrolling over the
-canvas isn't captured, slow idle auto-rotate that pauses while dragging)
-rather than scroll-position-driven — independent of the sticky-vs-normal-flow
-question.
+canvas isn't captured) rather than scroll-position-driven — independent of
+the sticky-vs-normal-flow question.
+
+**Correction (2026-09-08):** the idle auto-rotate described above was
+removed the same day it was recovered — it resumed a few seconds after every
+drag, so a user could never tell their own drag had done anything (reported
+twice as "click-drag doesn't work" before this was traced to the auto-rotate
+masking it, not a broken drag). Rotation is now click-drag only, static
+otherwise.
 
 **Recovery note (2026-09-08):** the two notes above, and the code implementing
 them, were done in a 2026-09-06 session but only ever landed in a `git
@@ -126,7 +132,7 @@ of stashing across a pull whenever practical.
 
 Spend the boldness in exactly two places and keep everything else silent.
 
-**a. The persistent brain.** A cortical surface with two-tone curvature shading (the gyral/sulcal binary map every neuroimager recognizes), rotating and re-coloring via click-drag orbit plus a slow idle auto-rotate (see §5's 2026-09-06 note — not scroll-driven). It shows the landing page's illustrative sample regional map (`static/js/landing.js`), not a data-accurate per-section overlay.
+**a. The persistent brain.** A cortical surface with two-tone curvature shading (the gyral/sulcal binary map every neuroimager recognizes), rotating and re-coloring via click-drag orbit only — static until touched (see §5's 2026-09-08 correction; not scroll-driven, no idle auto-rotate). It shows the landing page's illustrative sample regional map (`static/js/landing.js`) plus a colorbar legend, not a data-accurate per-section overlay.
 
 **b. The gap band.** The way a brain age gap is displayed, everywhere it appears. Never a bare number. A horizontal interval centered on the estimate, plotted against a marked zero line, so it is immediately visible whether the interval crosses zero. This is the product's ethical position rendered as a graphic, and it should be as recognizable as a logo.
 
@@ -136,10 +142,10 @@ Spend the boldness in exactly two places and keep everything else silent.
 
 Nothing autoplays as video; nothing loops without user input.
 
-- Brain rotation is click-drag (user-initiated) plus a slow idle auto-rotate that pauses while dragging — see §5's 2026-09-06 note for why this isn't scroll-linked.
+- Brain rotation is click-drag only, static otherwise — see §5's 2026-09-08 correction for why idle auto-rotate was removed.
 - Sections fade/rise in on scroll into view (`static/js/reveal.js`, shared across all five pages), staggered per section.
 - Gap bands draw outward from their center point on reveal.
-- `prefers-reduced-motion` disables auto-rotate and section-reveal animation (content shows immediately) but leaves click-drag rotation available, since that's user-initiated, not autoplay. Some users will be older; this is a health product.
+- `prefers-reduced-motion` disables section-reveal animation (content shows immediately) but leaves click-drag rotation available, since that's user-initiated, not autoplay. Some users will be older; this is a health product.
 
 ---
 

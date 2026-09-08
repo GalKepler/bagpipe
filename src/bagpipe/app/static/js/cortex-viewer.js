@@ -8,10 +8,10 @@
 //   viewer.addEventListener("regionhover", (e) => console.log(e.detail.regionId));
 //   viewer.setRegionValues({ 12: 1.4, 40: -0.8 });
 //
-// Rotation is user-driven (click-drag orbit, via three's OrbitControls) plus
-// a slow idle auto-rotate when the pointer isn't interacting — not tied to
-// page scroll. `prefers-reduced-motion` disables auto-rotate but leaves
-// drag-to-rotate available, since that's user-initiated, not autoplay.
+// Rotation is entirely user-driven: click-drag orbit via three's
+// OrbitControls, no idle auto-rotate. (An earlier auto-rotate-when-idle
+// version made drag look broken — it resumed spinning a few seconds after
+// every drag, so a user could never tell their drag had done anything.)
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -27,11 +27,6 @@ const DIVERGE_CENTER = new THREE.Color(TOKENS.bone);
 const DIVERGE_POSITIVE = new THREE.Color(TOKENS.warm);
 const DRACO_DECODER_PATH = "https://www.gstatic.com/draco/versioned/decoders/1.5.7/";
 
-const REDUCED_MOTION_QUERY =
-  typeof window !== "undefined" && window.matchMedia
-    ? window.matchMedia("(prefers-reduced-motion: reduce)")
-    : null;
-
 const tmpColor = new THREE.Color();
 
 export class CortexViewer extends EventTarget {
@@ -39,7 +34,6 @@ export class CortexViewer extends EventTarget {
     super();
     this.container = container;
     this.glbUrl = options.glbUrl ?? "cortex.glb";
-    this.reducedMotion = REDUCED_MOTION_QUERY ? REDUCED_MOTION_QUERY.matches : false;
 
     this._vertexRegionIds = null; // Uint16Array, length = vertex count
     this._baseColors = null; // Float32Array, length = vertex count * 3
@@ -132,18 +126,11 @@ export class CortexViewer extends EventTarget {
     this.controls.enableZoom = false;
     this.controls.minDistance = 50;
     this.controls.maxDistance = 800;
-    this.controls.autoRotate = !this.reducedMotion;
-    this.controls.autoRotateSpeed = 1.2;
-    // Pause idle auto-rotate for a bit after the user lets go, instead of
-    // resuming immediately — resuming instantly reads as fighting the user's
-    // last drag.
-    this._resumeAutoRotateAt = 0;
-    this.controls.addEventListener("start", () => {
-      this.controls.autoRotate = false;
-    });
-    this.controls.addEventListener("end", () => {
-      this._resumeAutoRotateAt = performance.now() + 4000;
-    });
+    // No idle auto-rotate: it never reads as "paused" to a real user (it
+    // resumes a few seconds after every drag), so a click-drag looks like
+    // it does nothing — the ambient spin drowns it out. Static until
+    // touched makes drag-to-rotate the only motion, and therefore obvious.
+    this.controls.autoRotate = false;
   }
 
   _load() {
@@ -261,14 +248,6 @@ export class CortexViewer extends EventTarget {
   _animate() {
     if (this._disposed) return;
     this._raf = requestAnimationFrame(this._animate);
-    if (
-      !this.reducedMotion &&
-      !this.controls.autoRotate &&
-      this._resumeAutoRotateAt &&
-      performance.now() >= this._resumeAutoRotateAt
-    ) {
-      this.controls.autoRotate = true;
-    }
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
