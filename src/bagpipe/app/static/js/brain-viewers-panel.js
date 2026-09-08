@@ -56,7 +56,6 @@ function init() {
 
   const cortexViewer = new CortexViewer(root.querySelector("[data-bv-cortex-stage]"), {
     glbUrl: "/static/mesh/cortex.glb",
-    interactive: true, // drag-to-rotate — this panel is persistent, not a scroll-hero
   });
   wireHover(cortexViewer, root.querySelector("[data-bv-cortex-hover]"), root, "cortex");
 

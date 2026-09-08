@@ -75,11 +75,50 @@ Prose measure capped at 64ch. Tabular figures everywhere.
 
 ## 5. Layout
 
+**Implementation note (2026-09-06, later; re-landed 2026-09-08 — see below).**
+The single-page scrollytelling spec below buried the hero/gap under ~1,500
+words of science and privacy prose. `/` now carries only Hero + The gap +
+What you get + Sample report (§8.1-8.4) with the sticky brain panel;
+Science, Team, Privacy, and Upload (§8.5-8.7) are their own pages
+(`/science`, `/team`, `/privacy`, `/upload`) sharing one nav/footer shell,
+single column, no brain panel. Reference: kinstitute.org.il's short visual
+landing + dedicated content pages. The sticky-brain layout described below
+still applies, just to `/` only.
+
 Split-viewport scrollytelling on desktop: **the brain is pinned in a sticky panel on the right for the full page**, content scrolls past it on the left. One continuous object that changes state — not seven disconnected sections each with its own graphic.
 
 On mobile the brain becomes a sticky top third and content scrolls beneath.
 
 Generous vertical rhythm: 160px between sections desktop, 96px mobile. Hairline rules rather than cards. No box-in-box.
+
+**Implementation note (2026-09-06):** two false starts before landing on this
+spec's own design. First attempt used `position: sticky; top: 0; height:
+100vh`, which glues the panel to the very top edge of the viewport for its
+entire sticky range — reported back as "stuck at the top, can't see it move."
+Second attempt (over-)corrected by pulling the brain out of the sticky panel
+entirely into a normal-flow hero visual that scrolls away after one viewport
+— but that's not what was asked for. Shipped: `.landing__brain` sticky at
+`top: 15vh; height: min(60vh, 44vw)` (clear of the top edge, doesn't fill the
+whole viewport), releasing near the bottom of the page. Rotation is
+click-drag (three.js OrbitControls, wheel-zoom disabled so scrolling over the
+canvas isn't captured, slow idle auto-rotate that pauses while dragging)
+rather than scroll-position-driven — independent of the sticky-vs-normal-flow
+question.
+
+**Recovery note (2026-09-08):** the two notes above, and the code implementing
+them, were done in a 2026-09-06 session but only ever landed in a `git
+stash` — a `pull --ff-only` right after moved `main` forward without the
+stash being reapplied, and a later, unrelated session rebuilt the landing
+page from the pre-stash single-page version, never knowing the multi-page
+split existed. Symptom noticed 2026-09-08: sections all on one page, brain
+glued to the top, no click-drag. Recovered from `git stash list` (the stash
+itself, plus `git log --all` for the merge commit that recorded stray
+untracked files at the same point) and re-applied onto the landing page's
+current (2026-09-07) content, which had grown a Sample report section (now
+folded into `/`, §8.4) since the original stash was made. Moral: an
+uncommitted `git stash` survives a `pull --ff-only` on disk but is invisible
+to anyone not looking for it — commit work-in-progress to a branch instead
+of stashing across a pull whenever practical.
 
 ---
 
@@ -87,7 +126,7 @@ Generous vertical rhythm: 160px between sections desktop, 96px mobile. Hairline 
 
 Spend the boldness in exactly two places and keep everything else silent.
 
-**a. The persistent brain.** A cortical surface with two-tone curvature shading (the gyral/sulcal binary map every neuroimager recognizes), rotating and re-coloring as the page scrolls. Regions illuminate in the diverging map only when that section is discussing them.
+**a. The persistent brain.** A cortical surface with two-tone curvature shading (the gyral/sulcal binary map every neuroimager recognizes), rotating and re-coloring via click-drag orbit plus a slow idle auto-rotate (see §5's 2026-09-06 note — not scroll-driven). It shows the landing page's illustrative sample regional map (`static/js/landing.js`), not a data-accurate per-section overlay.
 
 **b. The gap band.** The way a brain age gap is displayed, everywhere it appears. Never a bare number. A horizontal interval centered on the estimate, plotted against a marked zero line, so it is immediately visible whether the interval crosses zero. This is the product's ethical position rendered as a graphic, and it should be as recognizable as a logo.
 
@@ -95,16 +134,18 @@ Spend the boldness in exactly two places and keep everything else silent.
 
 ## 7. Motion
 
-Scroll-linked only. Nothing autoplays, nothing loops.
+Nothing autoplays as video; nothing loops without user input.
 
-- Brain rotation and region illumination driven by scroll position, so it feels responsive rather than like a video.
-- Numbers count up once on entry, then rest.
-- Gap bands draw outward from their center point.
-- `prefers-reduced-motion` gets a fully static page with the brain at a fixed, well-chosen angle. Some users will be older; this is a health product.
+- Brain rotation is click-drag (user-initiated) plus a slow idle auto-rotate that pauses while dragging — see §5's 2026-09-06 note for why this isn't scroll-linked.
+- Sections fade/rise in on scroll into view (`static/js/reveal.js`, shared across all five pages), staggered per section.
+- Gap bands draw outward from their center point on reveal.
+- `prefers-reduced-motion` disables auto-rotate and section-reveal animation (content shows immediately) but leaves click-drag rotation available, since that's user-initiated, not autoplay. Some users will be older; this is a health product.
 
 ---
 
-## 8. Sections, in order
+## 8. Sections, per page (see §5's 2026-09-06 note for the page split)
+
+**`/`:**
 
 **1 — Hero**
 Brain rotating slowly, ambient. Single claim, no supporting stat block.
@@ -119,20 +160,36 @@ One button: `See a sample report`. The upload CTA comes later; asking for an MRI
 The commercial thesis in one image. Two brains side by side, both labelled 52 years old, one reading +6 and one reading −4, each with its gap band. Almost no copy — this explains the company in two seconds, and prose beneath it would weaken it.
 
 **3 — What you get**
-Regions illuminate in sequence as this scrolls. Three items, mono labels:
-tissue composition (gray matter, white matter, CSF, against reference); regional measures (cortical thickness and volume by region); brain age gap (global and regional).
+Three items, mono labels: tissue composition (gray matter, white matter, CSF, against reference); regional measures (cortical thickness and volume by region); brain age gap (global and regional).
 
-**4 — Sample report**
+**4 — Sample report** *(2026-09-07: implemented as its own section on `/`,
+carried by an illustrative gap band, rather than the embedded-live real
+participant this section originally specified — that's still the eventual
+target here.)*
 A real, fully interactive result from a consented cohort participant, embedded live — not a screenshot, not a modal. Letting someone touch the product before signing up is the strongest conversion asset and the strongest diligence asset simultaneously. Costs one anonymized record.
+
+**`/science`:**
 
 **5 — The science**
 Cohort size stated plainly — it's the moat and investors read it correctly. Model approach, the stacked ensemble, links to publications. This section is the credibility engine; let it be long and figure-rich rather than a footnote.
 
+**`/team`:**
+
 **6 — Who we are**
 Faces, real affiliations, institutional context. At this stage the founders *are* the trust signal, doing the work a company's brand would otherwise do.
 
+**`/privacy`:** what gets stripped from the file, when uploads are deleted,
+that data stays on our infrastructure, and that nothing is used for research
+without separate consent — a real policy page, linked from both `/` and
+`/upload`.
+
+**`/upload`:**
+
 **7 — Upload**
-Brain returns to full presence. One action. Below it, plainly stated: what gets stripped from the file, when uploads are deleted, that data stays on our infrastructure, and that nothing is used for research without separate consent.
+*(2026-09-06: `/upload` is single-column, no brain panel — kept simple
+rather than loading three.js on the highest-intent, most-conversion-sensitive
+page.)* One action. Below it, plainly stated, and linking to `/privacy` for
+the detail.
 
 ---
 

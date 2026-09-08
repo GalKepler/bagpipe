@@ -1,10 +1,9 @@
-"""The public landing page served at `GET /` — replaces the old bare-form
-`upload_page.py`. Implements `docs/design-brief.md`: a scrollytelling page
-with the cortex pinned in a sticky panel, science/people/privacy sections
-before the upload form, and the upload flow itself (identical wire contract
-to the old page — same field names, same poll loop, same `?job=` resume) at
-the bottom. Same "stdlib templating, no build step" approach as the rest of
-`app/`.
+"""The public, non-results pages — `/`, `/science`, `/team`, `/privacy`,
+`/upload` — replacing the old single-page `landing_page.py`. Implements
+`docs/design-brief.md` (see its 2026-09-06 note: the sticky-brain
+scrollytelling spec now applies to `/` only, the other four pages are plain
+single-column content sharing the same nav/footer shell). Same "stdlib
+templating, no build step" approach as the rest of `app/`.
 
 Numbers quoted in the science section (per-age-band MAE, cohort size, Cole
 slope) are real, taken from CLAUDE.md's 2026-09-03 pre-launch entry and
@@ -15,6 +14,9 @@ future promotion moves the leaderboard meaningfully.
 
 PEOPLE / CONTACT_EMAIL below are the two things this file cannot get right
 without the maintainer: fill in real names, roles, affiliation, and links.
+
+`gap_band_html`/`CONTACT_EMAIL` are also imported by `results_page.py` and
+`report.py` — this module is the shared home for both, not just `/`.
 """
 
 from __future__ import annotations
@@ -126,73 +128,135 @@ def gap_band_html(value: float, uncertainty: float, range_years: float = 15.0) -
     )
 
 
-_PAGE = Template("""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Aevantis — Brain Age Gap</title>
+_NAV_ITEMS = [
+    ("/science", "Science"),
+    ("/team", "Team"),
+    ("/privacy", "Privacy"),
+    ("/upload", "Upload"),
+]
+
+
+def _nav_html(active: str) -> str:
+    current_attr = ' aria-current="page"'
+    links = "\n".join(
+        f'<a href="{href}"{current_attr if href == active else ""}>{label}</a>'
+        for href, label in _NAV_ITEMS
+    )
+    return f"""<nav class="landing__nav">
+  <a class="brand" href="/"><img src="/static/logo-icon-96.png" alt=""><span>Aevantis</span></a>
+  <div class="landing__nav-links">
+    {links}
+  </div>
+</nav>"""
+
+
+_SHELL = Template("""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>$title — Aevantis</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Upload a T1-weighted MRI and see how your brain compares
-  to a reference cohort — with the uncertainty shown, not hidden.">
+<meta name="description" content="$description">
 $favicon_link
 $fonts_link
-$importmap
-$turnstile_script
+$head
 <style>$base_css $landing_css</style></head>
 <body>
-
-<nav class="landing__nav">
-  <a class="brand" href="#"><img src="/static/logo-icon-96.png" alt=""><span>Aevantis</span></a>
-  <div class="landing__nav-links">
-    <a href="#science">Science</a>
-    <a href="#people">Team</a>
-    <a href="#privacy">Privacy</a>
-    <a href="#upload">Upload</a>
-  </div>
-</nav>
-
-<div class="landing__grid">
+$nav
+<div class="landing__grid$grid_modifier">
   <div class="landing__content">
+$body
+  </div>
+$brain
+</div>
+$scripts
+</body></html>
+""")
 
-    <section class="landing__section landing__hero">
+_BRAIN_STAGE = (
+    '<div class="landing__brain" id="landing-brain-stage" data-scroll-brain title="Drag to rotate">'
+    "</div>"
+)
+
+
+def _shell(
+    *,
+    title: str,
+    description: str,
+    body: str,
+    active: str,
+    brain: bool = False,
+    head: str = "",
+    scripts: tuple[str, ...] = (),
+) -> str:
+    script_tags = "\n".join(scripts)
+    return _SHELL.substitute(
+        title=title,
+        description=description,
+        favicon_link=FAVICON_LINK,
+        fonts_link=FONTS_LINK,
+        head=head,
+        base_css=BASE_CSS,
+        landing_css=LANDING_CSS,
+        nav=_nav_html(active),
+        grid_modifier="" if brain else " landing__grid--plain",
+        body=body,
+        brain=_BRAIN_STAGE if brain else "",
+        scripts=script_tags,
+    )
+
+
+_FOOTER = Template("""<footer class="landing__footer">
+  <span>&copy; Aevantis</span>
+  <div>
+    <a href="/privacy">Privacy</a> &middot;
+    <a href="mailto:$contact_email">Contact</a>
+  </div>
+</footer>""")
+
+
+def render_landing() -> str:
+    body = f"""
+    <section class="landing__section landing__hero reveal" style="--i:0;">
       <p class="eyebrow">Brain Age Gap</p>
       <h1>Your brain has an age of its own.</h1>
       <p>Upload an MRI and see how yours compares to thousands of others —
       with the uncertainty shown, not hidden.</p>
       <div class="landing__cta-row">
-        <button type="button" data-scroll-to="sample">See a sample report</button>
-        <button type="button" class="button--secondary"
-                data-scroll-to="upload">Upload a scan</button>
+        <a href="/upload"><button type="button">Upload a scan</button></a>
+        <a href="/science">
+          <button type="button" class="button--secondary">See the science</button>
+        </a>
       </div>
     </section>
 
-    <section class="landing__section" id="gap">
+    <section class="landing__section reveal" style="--i:1;" id="gap">
       <p class="eyebrow">The gap</p>
       <h2>The same age. Two different brains.</h2>
       <div class="landing__gap-pair">
         <div class="landing__gap-item">
           <span class="eyebrow">52 years old</span>
-          $gap_example_neg
+          {gap_band_html(-4.0, 3.95)}
         </div>
         <div class="landing__gap-item">
           <span class="eyebrow">52 years old</span>
-          $gap_example_pos
+          {gap_band_html(6.0, 3.95)}
         </div>
       </div>
     </section>
 
-    <section class="landing__section" id="what-you-get">
+    <section class="landing__section reveal" style="--i:2;" id="what-you-get">
       <p class="eyebrow">What you get</p>
       <h2>Three measurements, not a score.</h2>
       <div class="landing__items">
-        <div class="landing__item" data-illuminate="tissue">
+        <div class="landing__item">
           <span class="eyebrow">01 — Tissue composition</span>
           <h3>Gray matter, white matter, CSF</h3>
           <p>Regional tissue volumes compared against the reference cohort.</p>
         </div>
-        <div class="landing__item" data-illuminate="regions">
+        <div class="landing__item">
           <span class="eyebrow">02 — Regional measures</span>
           <h3>400 cortical + subcortical regions</h3>
           <p>Volume by region, on the Schaefer 2018 / Tian 2020 parcellation.</p>
         </div>
-        <div class="landing__item" data-illuminate="bag">
+        <div class="landing__item">
           <span class="eyebrow">03 — Brain age gap</span>
           <h3>Global and regional</h3>
           <p>Predicted age minus chronological age, shown as an interval, never a bare number.</p>
@@ -200,18 +264,40 @@ $turnstile_script
       </div>
     </section>
 
-    <section class="landing__section" id="sample">
+    <section class="landing__section reveal" style="--i:3;" id="sample">
       <p class="eyebrow">Sample report</p>
       <h2>See it before you upload anything.</h2>
       <p>The brain on the right is driven by an illustrative example —
       not a real participant — so you can see what a report looks like
       before deciding to try it yourself.</p>
-      $sample_gap_band
+      {gap_band_html(-2.3, 4.03)}
+      <div class="landing__cta-row">
+        <a href="/upload"><button type="button">Upload a scan</button></a>
+      </div>
     </section>
 
-    <section class="landing__section landing__section--wide" id="science">
+    {_FOOTER.substitute(contact_email=CONTACT_EMAIL)}
+    """
+    return _shell(
+        title="Brain Age Gap",
+        description="Upload a T1-weighted MRI and see how your brain compares to a "
+        "reference cohort — with the uncertainty shown, not hidden.",
+        body=body,
+        active="/",
+        brain=True,
+        head=_IMPORTMAP,
+        scripts=(
+            '<script type="module" src="/static/js/reveal.js"></script>',
+            '<script type="module" src="/static/js/landing.js"></script>',
+        ),
+    )
+
+
+def render_science() -> str:
+    body = f"""
+    <section class="landing__section landing__section--wide reveal" style="--i:0;">
       <p class="eyebrow">The science</p>
-      <h2>What this measures, and how well it works.</h2>
+      <h1>What this measures, and how well it works.</h1>
       <p><strong>What a brain age gap is.</strong> A model estimates an age
       from brain structure alone; the gap is that estimate minus your
       chronological age. We report it as a measurement with an interval,
@@ -237,7 +323,7 @@ $turnstile_script
       <p><strong>Accuracy by age.</strong> Error is not the same at every
       age — most of the reference cohort is 18–40, so the model is
       most precise there and less precise outside it:</p>
-      $accuracy_table
+      {_accuracy_table_html()}
       <p class="muted">Typical error (mean absolute error), measured on the
       model's own held-out validation data, as of the last production
       promotion.</p>
@@ -253,17 +339,43 @@ $turnstile_script
       part of the number your report shows today.</p>
     </section>
 
-    <section class="landing__section landing__section--wide" id="people">
+    {_FOOTER.substitute(contact_email=CONTACT_EMAIL)}
+    """
+    return _shell(
+        title="Science",
+        description="What a brain age gap measures, the model behind it, and its accuracy by age.",
+        body=body,
+        active="/science",
+        scripts=('<script type="module" src="/static/js/reveal.js"></script>',),
+    )
+
+
+def render_team() -> str:
+    body = f"""
+    <section class="landing__section landing__section--wide reveal" style="--i:0;">
       <p class="eyebrow">Who we are</p>
-      <h2>The people behind this.</h2>
+      <h1>The people behind this.</h1>
       <div class="landing__people">
-        $people
+        {_people_html()}
       </div>
     </section>
 
-    <section class="landing__section landing__section--wide" id="privacy">
+    {_FOOTER.substitute(contact_email=CONTACT_EMAIL)}
+    """
+    return _shell(
+        title="Team",
+        description="The people behind Aevantis.",
+        body=body,
+        active="/team",
+        scripts=('<script type="module" src="/static/js/reveal.js"></script>',),
+    )
+
+
+def render_privacy() -> str:
+    body = f"""
+    <section class="landing__section landing__section--wide reveal" style="--i:0;">
       <p class="eyebrow">Privacy</p>
-      <h2>What happens to your scan.</h2>
+      <h1>What happens to your scan.</h1>
       <p><strong>Your face is removed before anything else happens.</strong>
       Every upload is defaced immediately, regardless of what you choose
       below, before any other processing step runs.</p>
@@ -286,7 +398,8 @@ $turnstile_script
       connection and a spam challenge on this form; the pages you're
       reading load fonts and a 3D graphics library from public CDNs. There
       is no analytics tracking and no advertising on this site.</p>
-      <p>Questions or a deletion request — <a href="mailto:$contact_email">$contact_email</a>.</p>
+      <p>Questions or a deletion request —
+      <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>.</p>
       <div class="landing__notice">
         This site provides information about your brain and how it compares
         to a reference cohort. It is a wellness and informational report only,
@@ -294,9 +407,38 @@ $turnstile_script
       </div>
     </section>
 
-    <section class="landing__section landing__section--wide" id="upload">
+    {_FOOTER.substitute(contact_email=CONTACT_EMAIL)}
+    """
+    return _shell(
+        title="Privacy",
+        description="What happens to your scan: deletion by default, what's "
+        "retained, and third parties involved.",
+        body=body,
+        active="/privacy",
+        scripts=('<script type="module" src="/static/js/reveal.js"></script>',),
+    )
+
+
+_TURNSTILE_SCRIPT = (
+    '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
+)
+_TURNSTILE_WIDGET = Template(
+    '<div class="cf-turnstile" data-sitekey="$site_key" style="margin-top:1em"></div>'
+)
+
+
+def render_upload(turnstile_site_key: str | None, max_upload_size_mb: int = 100) -> str:
+    if turnstile_site_key:
+        head = _TURNSTILE_SCRIPT
+        widget = _TURNSTILE_WIDGET.substitute(site_key=turnstile_site_key)
+    else:
+        head = ""
+        widget = ""
+
+    body = f"""
+    <section class="landing__section landing__section--wide reveal" style="--i:0;">
       <p class="eyebrow">Upload</p>
-      <h2>Get your report.</h2>
+      <h1>Get your report.</h1>
       <p>A T1-weighted MRI, as a NIfTI (<code>.nii</code>/<code>.nii.gz</code>)
       or a <code>.zip</code> of a DICOM series. Processing takes roughly an
       hour — give an email address to get the PDF report when it's
@@ -317,60 +459,26 @@ $turnstile_script
         <label>Email (optional) <input type="email" name="email"></label>
         <label><input type="checkbox" name="retain_uploads"> Retain my uploaded scan
           (otherwise it is deleted once processing finishes)</label>
-        $turnstile_widget
+        {widget}
         <button type="submit" id="submit-btn">Submit</button>
       </form>
       <div id="status" role="status" aria-live="polite"></div>
       <ol id="steps" class="steps"></ol>
-      <p class="landing__notice">Uploads over $max_upload_mb MB are rejected.
-      This is informational and not a medical assessment.</p>
+      <p class="landing__notice">Uploads over {max_upload_size_mb} MB are rejected.
+      This is informational and not a medical assessment. See our
+      <a href="/privacy">privacy page</a> for what happens to your scan.</p>
     </section>
 
-    <footer class="landing__footer">
-      <span>&copy; Aevantis</span>
-      <div>
-        <a href="#privacy">Privacy</a> &middot;
-        <a href="mailto:$contact_email">Contact</a>
-      </div>
-    </footer>
-
-  </div>
-  <div class="landing__brain" id="landing-brain-stage" data-scroll-brain></div>
-</div>
-
-<script type="module" src="/static/js/landing.js"></script>
-<script type="module" src="/static/js/upload.js"></script>
-</body></html>
-""")
-
-_TURNSTILE_SCRIPT = (
-    '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
-)
-_TURNSTILE_WIDGET = Template(
-    '<div class="cf-turnstile" data-sitekey="$site_key" style="margin-top:1em"></div>'
-)
-
-
-def render(turnstile_site_key: str | None, max_upload_size_mb: int = 100) -> str:
-    if turnstile_site_key:
-        script = _TURNSTILE_SCRIPT
-        widget = _TURNSTILE_WIDGET.substitute(site_key=turnstile_site_key)
-    else:
-        script = ""
-        widget = ""
-    return _PAGE.substitute(
-        favicon_link=FAVICON_LINK,
-        importmap=_IMPORTMAP,
-        fonts_link=FONTS_LINK,
-        base_css=BASE_CSS,
-        landing_css=LANDING_CSS,
-        turnstile_script=script,
-        turnstile_widget=widget,
-        gap_example_neg=gap_band_html(-4.0, 3.95),
-        gap_example_pos=gap_band_html(6.0, 3.95),
-        sample_gap_band=gap_band_html(-2.3, 4.03),
-        accuracy_table=_accuracy_table_html(),
-        people=_people_html(),
-        contact_email=CONTACT_EMAIL,
-        max_upload_mb=max_upload_size_mb,
+    {_FOOTER.substitute(contact_email=CONTACT_EMAIL)}
+    """
+    return _shell(
+        title="Upload",
+        description="Upload a T1-weighted MRI and get your Brain Age Gap report.",
+        body=body,
+        active="/upload",
+        head=head,
+        scripts=(
+            '<script type="module" src="/static/js/reveal.js"></script>',
+            '<script type="module" src="/static/js/upload.js"></script>',
+        ),
     )

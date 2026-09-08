@@ -1,82 +1,46 @@
-// Scroll orchestration for the landing page (docs/design-brief.md §5/§7):
-// the cortex stays pinned in `.landing__brain`, rotates/re-colors driven by
-// scroll position (never autoplay), and regions illuminate only while the
-// section discussing them is on screen. CortexViewer already exposes
-// exactly this surface (setScrollProgress/setRegionValues/regionhover —
-// see static/demo.html), so this file is wiring, not new viewer logic.
+// Wiring for the landing page's cortex viewer. The brain is a single
+// instance, pinned in a sticky panel on the right for the whole page
+// (docs/design-brief.md §5 — see style.py's `.landing__brain` for the
+// sticky positioning itself). Rotation is user-driven (click-drag orbit,
+// see cortex-viewer.js's OrbitControls), not scroll-tied.
+//
+// Scroll reveals live in reveal.js (shared with every other page); CTA
+// buttons are plain <a href> links, not JS-driven smooth-scroll.
 
 import { CortexViewer } from "./cortex-viewer.js";
+
+// Tiny deterministic PRNG (mulberry32) rather than Math.random() — this is
+// the illustrative "sample report" brain the landing page's copy promises
+// (not a real participant), and a fixed seed means every visitor sees the
+// same demonstration instead of a different-looking pattern per pageload.
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function syntheticRegionValues(regionIds) {
+  const rand = mulberry32(20260906);
+  const values = {};
+  for (const id of regionIds) {
+    // Smooth-ish spread rather than pure noise: most regions near zero,
+    // a handful of clear outliers — reads like a real regional BAG map
+    // rather than static.
+    const magnitude = rand() < 0.25 ? rand() * 3 : rand() * 0.8;
+    values[id] = (rand() < 0.5 ? -1 : 1) * magnitude;
+  }
+  return values;
+}
 
 const stage = document.querySelector("[data-scroll-brain]");
 if (stage) {
   const viewer = new CortexViewer(stage, { glbUrl: "/static/mesh/cortex.glb" });
-
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  // Overall page scroll progress [0,1] drives ambient rotation.
-  function onScroll() {
-    const doc = document.documentElement;
-    const max = doc.scrollHeight - doc.clientHeight;
-    viewer.setScrollProgress(max > 0 ? window.scrollY / max : 0);
-  }
-  if (!reducedMotion) {
-    window.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-  }
-
-  // Illuminate a few regions per named section while it's in view — a
-  // light illustrative touch, not a data-accurate overlay (that's the
-  // results page's job). Picks a small fixed spread of region ids per
-  // section so no extra fetch is needed.
-  const ILLUMINATE_REGIONS = {
-    tissue: { 5: 1.2, 40: -0.9, 120: 0.7 },
-    regions: { 20: -1.4, 60: 1.1, 200: -0.6, 310: 0.9 },
-    bag: { 8: 2.1, 45: -2.4, 150: 1.6, 260: -1.2 },
-  };
-
-  const sections = document.querySelectorAll("[data-illuminate]");
-  if (sections.length && "IntersectionObserver" in window) {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const key = entry.target.dataset.illuminate;
-            viewer.setRegionValues(ILLUMINATE_REGIONS[key] ?? {});
-          }
-        }
-      },
-      { rootMargin: "-40% 0px -40% 0px" }
-    );
-    sections.forEach((el) => observer.observe(el));
-  }
-}
-
-// Smooth-scroll for the CTA buttons (`data-scroll-to="upload"` etc). Native
-// behavior, not a library — respects reduced-motion automatically via CSS
-// scroll-behavior being left unset when that media query is active.
-document.querySelectorAll("[data-scroll-to]").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.getElementById(btn.dataset.scrollTo)?.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-    });
+  viewer.addEventListener("ready", async () => {
+    const regions = await fetch("/static/mesh/regions.json").then((r) => r.json());
+    viewer.setRegionValues(syntheticRegionValues(Object.values(regions)));
   });
-});
-
-// ponytail: skipped a per-number count-up animation for the accuracy table
-// (brief §7) — the section-level fade-in below already gives entry motion
-// for a static 6-cell table; add a real count-up if a section grows a
-// single large hero number that needs it.
-if ("IntersectionObserver" in window && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-  const fadeObserver = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        if (entry.isIntersecting) {
-          entry.target.style.animation = "fade-in 600ms ease both";
-          fadeObserver.unobserve(entry.target);
-        }
-      }
-    },
-    { threshold: 0.2 }
-  );
-  document.querySelectorAll(".landing__section").forEach((el) => fadeObserver.observe(el));
 }

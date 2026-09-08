@@ -1,4 +1,4 @@
-"""Shared CSS for the public-facing pages (`landing_page.py`, `results_page.py`,
+"""Shared CSS for the public-facing pages (`pages.py`, `results_page.py`,
 `report.py`) — one palette/type/animation set so the whole site and the emailed
 report read as the same product. Plain CSS custom properties + `<style>`, no
 templating/build step (same "stdlib first" reasoning as the rest of `app/`).
@@ -912,10 +912,13 @@ BRAIN_VIEWER_CSS = """
 }
 """
 
-# The landing page's own layout — split-viewport scrollytelling (design-brief
-# §5): brain pinned sticky right, content scrolls past on the left; collapses
-# to a sticky top-third brain + stacked content on mobile. Sections use
-# hairline rules rather than cards, per the brief's near-monochrome discipline.
+# The landing page's own layout (design-brief §5): brain pinned sticky in
+# the right column on `/`, vertically centered rather than glued to the top
+# edge (an earlier `top:0; height:100vh` attempt read as "stuck"). The other
+# four pages (`/science`, `/team`, `/privacy`, `/upload`) share the same
+# nav/footer shell but use `.landing__grid--plain` — single column, no brain
+# panel. Sections use hairline rules rather than cards, per the brief's
+# near-monochrome discipline.
 LANDING_CSS = """
 .landing { max-width: 100%; }
 .landing__grid {
@@ -923,13 +926,21 @@ LANDING_CSS = """
   grid-template-columns: minmax(0, 1fr) 44vw;
   align-items: start;
 }
+/* Content-only pages (science/team/privacy/upload) — no brain panel, no
+   second column. */
+.landing__grid--plain { grid-template-columns: 1fr; }
+.landing__grid--plain .landing__content { max-width: 80ch; margin: 0 auto; }
+.landing__content { max-width: 100vw; padding: 0 6vw; }
 .landing__brain {
   position: sticky;
-  top: 0;
-  height: 100vh;
-  border-left: 1px solid var(--line);
+  top: 15vh;
+  height: min(60vh, 44vw);
+  margin: 0 6vw 0 0;
+  border: 1px solid var(--line);
+  border-radius: 0.75em;
+  cursor: grab;
 }
-.landing__content { padding: 0 6vw; }
+.landing__brain:active { cursor: grabbing; }
 
 .landing__nav {
   position: fixed;
@@ -947,6 +958,7 @@ LANDING_CSS = """
   font-size: 0.8em; }
 .landing__nav-links a { text-decoration: none; color: var(--muted); }
 .landing__nav-links a:hover { color: var(--bone); }
+.landing__nav-links a[aria-current="page"] { color: var(--bone); }
 
 section.landing__section {
   padding: 160px 0;
@@ -956,10 +968,33 @@ section.landing__section {
 section.landing__section:first-of-type { border-top: none; }
 .landing__section--wide { max-width: none; }
 
-.landing__hero { padding-top: 30vh; border-top: none; }
+.landing__hero { padding-top: 30vh; min-height: 100vh; }
 .landing__hero h1 { font-size: clamp(2.4em, 6vw, 5.5em); margin: 0.3em 0; }
 .landing__hero p { font-size: 1.15em; color: var(--muted); max-width: 34ch; }
 .landing__cta-row { display: flex; gap: 1em; flex-wrap: wrap; margin-top: 1.5em; }
+
+/* Scroll reveal (static/js/reveal.js) — a section starts faded/offset and
+   settles in once it crosses the viewport, staggered per-section via the
+   --i custom property. */
+.reveal {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 500ms ease, transform 500ms ease;
+  transition-delay: calc(var(--i, 0) * 80ms);
+}
+.reveal.is-visible { opacity: 1; transform: none; }
+
+/* Gap bands draw outward from center once their section reveals (brief §7). */
+.reveal .gap-band__interval { transform: scaleX(0); transform-origin: center; }
+.reveal.is-visible .gap-band__interval { animation: gap-draw 600ms ease-out forwards; }
+@keyframes gap-draw { to { transform: scaleX(1); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .reveal.is-visible { opacity: 1; transform: none; transition: none; }
+  .reveal .gap-band__interval, .reveal.is-visible .gap-band__interval {
+    animation: none; transform: none;
+  }
+}
 
 .landing__section h2 { font-size: 2em; margin-bottom: 0.6em; }
 .landing__section p { color: var(--muted); font-size: 1.05em; }
@@ -1031,12 +1066,22 @@ section.landing__section:first-of-type { border-top: none; }
 .landing__footer a:hover { color: var(--bone); }
 
 @media (max-width: 900px) {
+  /* Brief §5: "on mobile the brain becomes a sticky top third and content
+     scrolls beneath" — a side-by-side column doesn't fit a narrow screen. */
   .landing__grid { grid-template-columns: 1fr; }
-  .landing__brain { position: sticky; top: 0; height: 34vh; border-left: none;
-    border-bottom: 1px solid var(--line); order: -1; }
+  .landing__brain {
+    position: sticky;
+    top: 0;
+    height: 34vh;
+    margin: 0;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    order: -1;
+  }
+  .landing__hero { padding-top: 4vh; }
   .landing__content { padding: 0 5vw; }
   section.landing__section { padding: 96px 0; max-width: none; }
-  .landing__hero { padding-top: 10vh; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -250,15 +250,32 @@ def test_report_pdf_rejects_non_uuid_job_id(tmp_path, monkeypatch):
     assert client.get("/jobs/not-a-uuid/report.pdf").status_code == 404
 
 
-def test_landing_page_renders(monkeypatch):
-    monkeypatch.setattr(api, "load_config", lambda: {"app": {"turnstile_site_key": "site-123"}})
+def test_landing_page_renders():
     client = TestClient(api.app)
     resp = client.get("/")
     assert resp.status_code == 200
+    assert 'id="landing-brain-stage"' in resp.text
+    assert 'href="/upload"' in resp.text
+
+
+def test_science_team_privacy_pages_render():
+    client = TestClient(api.app)
+    for path, marker in (("/science", "science"), ("/team", "team"), ("/privacy", "privacy")):
+        resp = client.get(path)
+        assert resp.status_code == 200
+        assert f'aria-current="page"' in resp.text
+        assert f'href="/{marker}" aria-current="page"' in resp.text
+        # content-only pages carry no brain panel
+        assert 'id="landing-brain-stage"' not in resp.text
+
+
+def test_upload_page_renders_turnstile_site_key(monkeypatch):
+    monkeypatch.setattr(api, "load_config", lambda: {"app": {"turnstile_site_key": "site-123"}})
+    client = TestClient(api.app)
+    resp = client.get("/upload")
+    assert resp.status_code == 200
     assert "site-123" in resp.text
-    assert 'id="upload"' in resp.text
-    assert 'id="science"' in resp.text
-    assert 'id="privacy"' in resp.text
+    assert 'id="f"' in resp.text
 
 
 def test_predict_rejects_when_turnstile_configured_and_missing_token(tmp_path, monkeypatch):

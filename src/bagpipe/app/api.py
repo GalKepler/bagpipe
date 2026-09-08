@@ -40,7 +40,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from bagpipe.app import turnstile
-from bagpipe.app.landing_page import render as render_landing_page
+from bagpipe.app.pages import (
+    render_landing,
+    render_privacy,
+    render_science,
+    render_team,
+    render_upload,
+)
 from bagpipe.app.queue import huey, process_job
 from bagpipe.app.results_page import render as render_results_page
 from bagpipe.core.config import get_path, load_config
@@ -49,6 +55,24 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="bagpipe — Brain Age Gap report")
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.middleware("http")
+async def _no_cache_static(request: Request, call_next):
+    """This app has no build step and no content-hashed filenames, so a JS/CSS
+    edit at the same URL needs every viewer to actually re-fetch it. Without
+    an explicit Cache-Control, Cloudflare fills the gap with its own ~4h
+    default for static extensions — both at its edge and via the header it
+    forwards to the browser — so a deploy silently doesn't show up for
+    anyone with a warm cache. `no-cache` still lets browsers/Cloudflare keep
+    a cached copy, it just forces a conditional revalidate (cheap, ETag-
+    based) before trusting it, rather than a real cache-busting scheme.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 
 # Lowercase-normalized `uuid.uuid4()` hex form — every route takes `job_id`
 # straight from the URL and uses it to build a filesystem path, so this is
@@ -73,8 +97,28 @@ _UPLOAD_CHUNK_BYTES = 1024 * 1024  # 1 MiB, streamed to avoid buffering a huge u
 
 @app.get("/", response_class=HTMLResponse)
 async def landing_page() -> str:
+    return render_landing()
+
+
+@app.get("/science", response_class=HTMLResponse)
+async def science_page() -> str:
+    return render_science()
+
+
+@app.get("/team", response_class=HTMLResponse)
+async def team_page() -> str:
+    return render_team()
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page() -> str:
+    return render_privacy()
+
+
+@app.get("/upload", response_class=HTMLResponse)
+async def upload_page() -> str:
     app_cfg = load_config()["app"]
-    return render_landing_page(
+    return render_upload(
         app_cfg.get("turnstile_site_key"), app_cfg.get("max_upload_size_mb", 100)
     )
 

@@ -7,7 +7,11 @@
 //   const viewer = new CortexViewer(containerEl, { glbUrl: "../mesh/cortex.glb" });
 //   viewer.addEventListener("regionhover", (e) => console.log(e.detail.regionId));
 //   viewer.setRegionValues({ 12: 1.4, 40: -0.8 });
-//   viewer.setScrollProgress(0.5);
+//
+// Rotation is user-driven (click-drag orbit, via three's OrbitControls) plus
+// a slow idle auto-rotate when the pointer isn't interacting — not tied to
+// page scroll. `prefers-reduced-motion` disables auto-rotate but leaves
+// drag-to-rotate available, since that's user-initiated, not autoplay.
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -35,22 +39,13 @@ export class CortexViewer extends EventTarget {
     super();
     this.container = container;
     this.glbUrl = options.glbUrl ?? "cortex.glb";
-    // Scroll-driven rotation (setScrollProgress) is the landing-page hero's
-    // deliberate design — a pinned cortex that turns as you scroll through
-    // its narrative. A persistent panel (the results page's "3D brain"
-    // section) isn't a scroll-hero, so it opts into mouse-drag orbit instead
-    // via `interactive: true`; the two modes are mutually exclusive per
-    // instance and this constructor default keeps the landing page unaffected.
-    this.interactive = options.interactive ?? false;
     this.reducedMotion = REDUCED_MOTION_QUERY ? REDUCED_MOTION_QUERY.matches : false;
 
     this._vertexRegionIds = null; // Uint16Array, length = vertex count
     this._baseColors = null; // Float32Array, length = vertex count * 3
     this._mesh = null;
     this._hoveredRegionId = null;
-    this._scrollT = 0;
     this._disposed = false;
-    this._controls = null;
 
     this._initScene();
     this._initInteraction();
@@ -91,20 +86,13 @@ export class CortexViewer extends EventTarget {
     colorAttr.needsUpdate = true;
   }
 
-  /** t in [0,1] drives rotation. No-op under prefers-reduced-motion or in interactive mode. */
-  setScrollProgress(t) {
-    this._scrollT = Math.min(1, Math.max(0, t));
-    if (this.reducedMotion || this.interactive || !this._mesh) return;
-    this._mesh.rotation.y = THREE.MathUtils.degToRad(-180 + this._scrollT * 360);
-  }
-
   dispose() {
     this._disposed = true;
     cancelAnimationFrame(this._raf);
     this._resizeObserver?.disconnect();
     this.renderer.domElement.removeEventListener("pointermove", this._onPointerMove);
     this.renderer.domElement.removeEventListener("pointerleave", this._onPointerLeave);
-    this._controls?.dispose();
+    this.controls.dispose();
     this._mesh?.geometry.dispose();
     this._mesh?.material.dispose();
     this.renderer.dispose();
@@ -132,6 +120,30 @@ export class CortexViewer extends EventTarget {
     const fill = new THREE.DirectionalLight(0xffffff, 0.3);
     fill.position.set(-1, -0.5, -1);
     this.scene.add(fill);
+
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.enablePan = false;
+    // Wheel-zoom captures the wheel event on the canvas (preventDefault, so
+    // the page never sees it) — on a viewer embedded inline in a scrolling
+    // page (not a full-screen viewer) that traps the page's own scroll the
+    // moment the pointer is over the brain, which reads as "stuck." Drag to
+    // rotate is the interaction this page needs; zoom isn't worth that cost.
+    this.controls.enableZoom = false;
+    this.controls.minDistance = 50;
+    this.controls.maxDistance = 800;
+    this.controls.autoRotate = !this.reducedMotion;
+    this.controls.autoRotateSpeed = 1.2;
+    // Pause idle auto-rotate for a bit after the user lets go, instead of
+    // resuming immediately — resuming instantly reads as fighting the user's
+    // last drag.
+    this._resumeAutoRotateAt = 0;
+    this.controls.addEventListener("start", () => {
+      this.controls.autoRotate = false;
+    });
+    this.controls.addEventListener("end", () => {
+      this._resumeAutoRotateAt = performance.now() + 4000;
+    });
   }
 
   _load() {
@@ -183,7 +195,6 @@ export class CortexViewer extends EventTarget {
     this.scene.add(mesh);
     this._mesh = mesh;
     this._frameCamera(geometry.boundingSphere);
-    this.setScrollProgress(this._scrollT);
     this.dispatchEvent(new CustomEvent("ready"));
   }
 
@@ -195,10 +206,10 @@ export class CortexViewer extends EventTarget {
     this.camera.near = distance / 100;
     this.camera.far = distance * 100;
     this.camera.updateProjectionMatrix();
-    if (this._controls) {
-      this._controls.target.copy(sphere.center);
-      this._controls.update();
-    }
+    this.controls.target.copy(sphere.center);
+    this.controls.minDistance = distance * 0.4;
+    this.controls.maxDistance = distance * 2.5;
+    this.controls.update();
   }
 
   // -- interaction -------------------------------------------------------
@@ -210,21 +221,6 @@ export class CortexViewer extends EventTarget {
     this._onPointerLeave = () => this._setHoveredRegion(null);
     this.renderer.domElement.addEventListener("pointermove", this._onPointerMove);
     this.renderer.domElement.addEventListener("pointerleave", this._onPointerLeave);
-
-    if (this.interactive) {
-      const controls = new OrbitControls(this.camera, this.renderer.domElement);
-      // No zoom: a mousewheel over this panel must scroll the page, not dolly
-      // the camera — OrbitControls only preventDefault()s the wheel event
-      // when enableZoom is true, so leaving it false keeps page scroll intact.
-      controls.enableZoom = false;
-      controls.enablePan = false;
-      controls.rotateSpeed = 0.6;
-      // Damping (inertia after release) is ambient motion once you let go —
-      // skip it under prefers-reduced-motion, same as the scroll-hero mode.
-      controls.enableDamping = !this.reducedMotion;
-      controls.dampingFactor = 0.1;
-      this._controls = controls;
-    }
   }
 
   _handlePointerMove(event) {
@@ -265,7 +261,15 @@ export class CortexViewer extends EventTarget {
   _animate() {
     if (this._disposed) return;
     this._raf = requestAnimationFrame(this._animate);
-    if (this._controls?.enableDamping) this._controls.update();
+    if (
+      !this.reducedMotion &&
+      !this.controls.autoRotate &&
+      this._resumeAutoRotateAt &&
+      performance.now() >= this._resumeAutoRotateAt
+    ) {
+      this.controls.autoRotate = true;
+    }
+    this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
 }

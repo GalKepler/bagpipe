@@ -1182,6 +1182,35 @@ same PR.**
       promoted model and no CAT12 container — the first real upload after
       deploy is still the thing that proves it end to end.*
 
+      *Update (2026-09-08): recovered a real production regression — a
+      2026-09-06 landing-page redesign (multi-page split `/`, `/science`,
+      `/team`, `/privacy`, `/upload`; brain panel sticky-centered, not glued
+      to the top; click-drag OrbitControls rotation instead of scroll-driven)
+      had only ever landed in a `git stash` before a `pull --ff-only`, and a
+      later session rebuilt the single-page landing page from its pre-stash
+      state without knowing the stash existed — so the redesign was live on
+      disk for two days but never actually served. Found via `git stash
+      list` + `git log --all` (the stash's untracked-files parent commit
+      held the new `pages.py`/`reveal.js`, never committed anywhere).
+      Re-applied onto the landing page's current content (which had grown a
+      Sample report section since the original stash), splitting
+      `landing_page.py` into `bagpipe.app.pages` (`render_landing`/
+      `_science`/`_team`/`_privacy`/`_upload`, five routes in `api.py`);
+      `cortex-viewer.js` now always runs OrbitControls (click-drag +
+      idle auto-rotate, wheel-zoom disabled) instead of the old
+      scroll-tied/`interactive`-flag split; new `static/js/reveal.js` drives
+      the shared scroll-in-view fade shared by all five pages. Also added
+      an `api.py` middleware forcing `Cache-Control: no-cache` on
+      `/static/*` — Cloudflare's ~4h edge default for static extensions was
+      the first (wrong) theory chased for "why don't I see the fix," and is
+      a real risk for the next static-asset deploy even though it wasn't
+      the actual cause this time. Full details and the recovery method:
+      `docs/design-brief.md` §5's 2026-09-08 note. Test suite 196/196 +
+      ruff clean. **Lesson for future sessions**: an uncommitted `git
+      stash` survives a `pull --ff-only` on disk but is invisible to
+      anyone not specifically looking for it — prefer committing
+      work-in-progress to a branch over stashing across a pull.*
+
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.
 

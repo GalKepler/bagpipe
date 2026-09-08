@@ -22,7 +22,7 @@ from string import Template
 
 from bagpipe.app import charts, region_names
 from bagpipe.app import narrative as narrative_mod
-from bagpipe.app.landing_page import CONTACT_EMAIL, gap_band_html
+from bagpipe.app.pages import CONTACT_EMAIL, gap_band_html
 from bagpipe.app.style import BASE_CSS, BRAIN_VIEWER_CSS, FAVICON_LINK, FONTS_LINK, RESULTS_CSS
 
 # unpkg pins for the 3D-viewer ES modules — cortex-viewer.js / volume-viewer.js

@@ -22,7 +22,7 @@ from weasyprint import HTML
 
 from bagpipe.app import charts, region_names
 from bagpipe.app import narrative as narrative_mod
-from bagpipe.app.landing_page import CONTACT_EMAIL, gap_band_html
+from bagpipe.app.pages import CONTACT_EMAIL, gap_band_html
 
 _LOGO_PATH = Path(__file__).parent / "static" / "logo-icon-96.png"
 _LOGO_DATA_URI = "data:image/png;base64," + base64.b64encode(_LOGO_PATH.read_bytes()).decode()
