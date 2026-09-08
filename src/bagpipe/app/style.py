@@ -52,7 +52,14 @@ body {
   background: var(--ground);
   line-height: 1.5;
   font-size: 16px;
-  overflow-x: hidden;
+  /* No overflow-x here (html's above already stops the horizontal
+     scrollbar): setting overflow-x on BOTH html and body makes body's
+     overflow-y compute to `auto` too (CSS's visible/non-visible coupling
+     rule), which turns body into the nearest scroll-container ancestor for
+     every `position: sticky` descendant instead of the real page scroller —
+     the sticky element then never re-triggers on window scroll and just
+     scrolls away with the content (confirmed live: a landing__brain with
+     `position: sticky` moved 1:1 with scroll instead of sticking). */
   font-variant-numeric: tabular-nums;
 }
 
