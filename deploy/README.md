@@ -105,6 +105,30 @@ anything arriving through the tunnel, so keep `max_upload_size_mb` at or below
 app never sees and cannot explain to the user. Raise both together only on a
 paid plan.
 
+**Static asset caching — a real incident (2026-09-08).** `api.py`'s
+`_no_cache_static` middleware sends `Cache-Control: no-cache` on every
+`/static/*` response so a JS/CSS edit at the same URL is picked up on next
+load. **Cloudflare ignores this.** On the plan this tunnel runs on,
+Cloudflare's default cache behavior for static file extensions (js/css/…)
+overrides the origin's `Cache-Control` with its own Browser Cache TTL — this
+domain sends `max-age=14400` (4h) to every visitor regardless of what the
+origin says, and confirmed to also vary unpredictably *between Cloudflare
+edge PoPs*: some requests got the current file, others got a version from
+hours earlier, simultaneously, with no purge or redeploy in between. This
+was root-caused only after several rounds of "still broken" reports that
+looked exactly like app bugs (and some real ones got found and fixed along
+the way) but the *last* mile turned out to be edge-cache staleness the app
+has no way to see or control.
+
+**Fix (do this on the Cloudflare dashboard, not in code):** Rules → Cache
+Rules → add a rule matching `URI Path starts with /static/` → **Cache
+eligibility: Bypass cache** (or, if you want static assets cached but
+correct, "Respect origin" / set Edge TTL to "Use cache-control header").
+Without this, a deploy that changes `src/bagpipe/app/static/**` is not
+reliably live for anyone until Cloudflare's TTL expires on its own — a
+service restart alone (see systemd section above) is not enough to make a
+static-file change visible in production.
+
 ## Public-abuse protection
 
 Each accepted `/predict` costs roughly an hour of wall-clock on this

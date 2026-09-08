@@ -1211,6 +1211,36 @@ same PR.**
       anyone not specifically looking for it — prefer committing
       work-in-progress to a branch over stashing across a pull.*
 
+      *Update (2026-09-08, later same day): the actual cause of several
+      more rounds of "still doesn't work" on the landing brain (idle
+      auto-rotate removed, then a real touch-scroll-vs-rotate conflict
+      fixed — both real bugs, both correctly fixed) turned out to be a
+      third, separate problem underneath: **Cloudflare's edge cache for
+      `/static/*` ignores `api.py`'s `Cache-Control: no-cache` origin
+      header** and applies its own ~4h Browser Cache TTL instead, and does
+      so *inconsistently across edge PoPs* — repeated fetches of the exact
+      same URL, seconds apart, alternated between an hours-stale
+      `cortex-viewer.js` (no `OrbitControls` at all — pre-dating this whole
+      session) and the current one. Confirmed directly: importing the live
+      module in-page and reading `CortexViewer.prototype._initScene.
+      toString()` showed the *old* source despite `curl` against the same
+      URL, moments apart, showing the current one. This is why the landing
+      page and the results page's brain viewer (identical code, both go
+      through `cortex-viewer.js`) could visibly behave differently for the
+      same visitor — not a code difference, a cache one. No code fix closes
+      this (versioning the *entry* `<script src>` doesn't help — the actual
+      stale resource is a nested `import` inside another module, which
+      would need every internal import specifier re-templated per deploy
+      to bust the same way). Documented as an infra fix instead:
+      `deploy/README.md`'s new "Static asset caching" section — a
+      Cloudflare Cache Rule bypassing `/static/*` (or honoring origin
+      headers) is required; this needs dashboard/API access this session
+      doesn't have. **Until that Cache Rule is added, do not trust "the fix
+      didn't work" reports about anything under `static/` as proof the
+      code is wrong** — check the served file's actual content in-browser
+      (not just `curl`, which can hit a different, luckier edge PoP)
+      before re-diagnosing as an app bug.*
+
 Update the checkboxes and add dated notes here as phases complete, so every session
 starts with accurate context.
 
