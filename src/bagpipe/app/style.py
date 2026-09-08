@@ -938,16 +938,38 @@ LANDING_CSS = """
 .landing__grid--plain { grid-template-columns: 1fr; }
 .landing__grid--plain .landing__content { max-width: 80ch; margin: 0 auto; }
 .landing__content { max-width: 100vw; padding: 0 6vw; }
-.landing__brain {
+.landing__brain-panel {
   position: sticky;
   top: 15vh;
-  height: min(60vh, 44vw);
   margin: 0 6vw 0 0;
+}
+.landing__brain {
+  height: min(60vh, 44vw);
   border: 1px solid var(--line);
   border-radius: 0.75em;
   cursor: grab;
+  overflow: hidden;
 }
 .landing__brain:active { cursor: grabbing; }
+.landing__brain-legend { margin-top: 1em; }
+.landing__brain-caption {
+  margin: 0 0 0.5em;
+  font-family: 'Geist Mono', monospace;
+  font-size: 0.78em;
+  color: var(--muted);
+}
+/* Same generic colorbar component as the results page (style.py's
+   RESULTS_CSS) — duplicated here rather than shared, since the landing
+   page's CSS bundle doesn't otherwise pull in results-page chrome. */
+.colorbar { display: grid; gap: 0.3em; width: 100%; }
+.colorbar__row { display: flex; align-items: center; gap: 0.6em; }
+.colorbar__label { font-size: 0.78em; color: var(--muted); white-space: nowrap; }
+.colorbar__track {
+  flex: 1;
+  height: 0.6em;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+}
 
 .landing__nav {
   position: fixed;
@@ -1076,16 +1098,21 @@ section.landing__section:first-of-type { border-top: none; }
   /* Brief §5: "on mobile the brain becomes a sticky top third and content
      scrolls beneath" — a side-by-side column doesn't fit a narrow screen. */
   .landing__grid { grid-template-columns: 1fr; }
-  .landing__brain {
+  .landing__brain-panel {
     position: sticky;
     top: 0;
-    height: 34vh;
     margin: 0;
+    order: -1;
+    background: var(--ground);
+    padding-bottom: 0.5em;
+  }
+  .landing__brain {
+    height: 30vh;
     border-radius: 0;
     border-left: none;
     border-right: none;
-    order: -1;
   }
+  .landing__brain-legend { margin-top: 0.4em; padding: 0 1em; }
   .landing__hero { padding-top: 4vh; }
   .landing__content { padding: 0 5vw; }
   section.landing__section { padding: 96px 0; max-width: none; }

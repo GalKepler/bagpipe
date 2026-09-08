@@ -170,10 +170,23 @@ $scripts
 </body></html>
 """)
 
-_BRAIN_STAGE = (
-    '<div class="landing__brain" id="landing-brain-stage" data-scroll-brain title="Drag to rotate">'
-    "</div>"
-)
+_BRAIN_STAGE = """
+<div class="landing__brain-panel">
+  <div class="landing__brain" id="landing-brain-stage" data-scroll-brain
+       title="Drag to rotate"></div>
+  <div class="landing__brain-legend">
+    <p class="landing__brain-caption">Illustrative regional Brain Age Gap</p>
+    <div class="colorbar">
+      <div class="colorbar__row">
+        <span class="colorbar__label">Younger than expected</span>
+        <div class="colorbar__track"
+             style="background: linear-gradient(to right, #3FA89A, #E8E6DF, #E0873A)"></div>
+        <span class="colorbar__label">Older than expected</span>
+      </div>
+    </div>
+  </div>
+</div>
+"""
 
 
 def _shell(
