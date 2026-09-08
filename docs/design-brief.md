@@ -111,6 +111,23 @@ twice as "click-drag doesn't work" before this was traced to the auto-rotate
 masking it, not a broken drag). Rotation is now click-drag only, static
 otherwise.
 
+**Second correction (2026-09-08, same day):** the *actual* root cause of
+every "doesn't rotate on click" report, on a touchscreen — OrbitControls
+claims one-finger touch for ROTATE by default and sets the canvas's
+`touch-action` to `none` unconditionally, regardless of that mapping. On a
+brain embedded inline in a normally-scrolling page (not a full-screen
+viewer), that silently ate the page's own touch-scroll: confirmed live, a
+vertical swipe over the canvas rotated the mesh and left `window.scrollY`
+at 0. Fixed in `cortex-viewer.js`: `controls.touches = { ONE: undefined,
+TWO: undefined }` plus `domElement.style.touchAction = 'pan-y'` after
+construction — touch now scrolls the page like everywhere else, and only
+mouse/pen drag orbits the brain. Verified with an isolated harness
+(`controls.state` stays `NONE`, camera position provably unchanged across a
+simulated touch swipe) since three consecutive live reports of "still
+rotates on scroll, not on click" were exactly this: swiping to scroll *was*
+the click-equivalent gesture rotating it, on whatever touchscreen device was
+being used to test.
+
 **Recovery note (2026-09-08):** the two notes above, and the code implementing
 them, were done in a 2026-09-06 session but only ever landed in a `git
 stash` — a `pull --ff-only` right after moved `main` forward without the

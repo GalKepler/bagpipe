@@ -131,6 +131,18 @@ export class CortexViewer extends EventTarget {
     // it does nothing — the ambient spin drowns it out. Static until
     // touched makes drag-to-rotate the only motion, and therefore obvious.
     this.controls.autoRotate = false;
+    // Touch is deliberately NOT wired to rotate. OrbitControls' constructor
+    // sets the canvas's `touch-action` to `none` unconditionally (to claim
+    // one-finger drag for itself) regardless of this.touches — on a page
+    // where the brain sits inline in normal scrolling content (not a
+    // full-screen viewer), that silently eats the page's own touch-scroll
+    // the instant a finger lands on the canvas: confirmed live, a vertical
+    // swipe over it rotated the mesh and left `window.scrollY` completely
+    // unmoved. A phone/tablet visitor needs to be able to scroll through
+    // the page over the brain far more than they need touch-rotate, so
+    // touch keeps native scrolling and only mouse/pen drag orbits.
+    this.controls.touches = { ONE: undefined, TWO: undefined };
+    this.renderer.domElement.style.touchAction = "pan-y";
   }
 
   _load() {
