@@ -22,14 +22,17 @@ for manual triage — they never block the rest of the cohort.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import sqlite3
 import subprocess
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+import nibabel as nib
 import yaml
 
 from bagpipe.core.apptainer import apptainer_env
@@ -52,12 +55,46 @@ def _resolve_apptainer_image(config: dict) -> Path:
     )
 
 
+def _run_number(t1w_path: Path) -> int | None:
+    match = re.search(r"_run-(\d+)", t1w_path.name)
+    return int(match.group(1)) if match else None
+
+
+def _header_dims(t1w_path: Path) -> tuple[int, ...] | None:
+    """Matrix size from the NIfTI header only (no voxel data read); None
+    if the header can't be read (corrupt/truncated file)."""
+    try:
+        return tuple(nib.load(t1w_path).header.get_data_shape()[:3])
+    except Exception:
+        return None
+
+
 def _select_best_t1w(files: list[Path], anat_dir: Path) -> Path | None:
-    """One T1w per session, matching the maintainer's prior
-    find_t1w_for_cat12.py selection: prefer rec-norm/non-defaced/run-01;
-    else the only file if unambiguous; else skip (ambiguous — multi-run or
-    defaced variants with no clear winner, needs a human to disambiguate).
+    """One T1w per session: prefer the highest rec-norm/non-defaced run
+    with a readable header whose dimensions match the most common ones
+    among those runs (ties → the lowest run's) — a repeated MPRAGE is
+    re-acquired because the earlier one was unusable (motion), while an
+    aborted repeat has a different matrix size. Mirrored in snbb_scheduler's
+    scripts/snbb_run_cat.sh. If no such header is readable, fall back to the
+    maintainer's prior find_t1w_for_cat12.py selection: rec-norm/non-defaced/
+    run-01; else the only file if unambiguous; else skip (ambiguous —
+    multi-run or defaced variants with no clear winner, needs a human to
+    disambiguate).
     """
+    runs = sorted(
+        (
+            f
+            for f in files
+            if "rec-norm" in f.name and "acq-defaced" not in f.name and _run_number(f) is not None
+        ),
+        key=_run_number,
+    )
+    dims = {f: d for f in runs if (d := _header_dims(f)) is not None}
+    if dims:
+        # most_common keeps first-encountered order on ties → the lowest run's dims
+        reference = Counter(dims.values()).most_common(1)[0][0]
+        return [f for f in dims if dims[f] == reference][-1]
+
     preferred = [
         f
         for f in files

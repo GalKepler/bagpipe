@@ -11,6 +11,9 @@ from __future__ import annotations
 from contextlib import closing
 from pathlib import Path
 
+import nibabel as nib
+import numpy as np
+
 from bagpipe.preprocess.cat12_cohort import (
     _REQUIRED_SURFACE_FILE_PREFIXES,
     _chunks,
@@ -51,15 +54,74 @@ def test_find_raw_t1w_excludes_all_cat12_output_prefixes(tmp_path: Path):
     assert found == [raw]
 
 
-def test_find_raw_t1w_prefers_rec_norm_run01_over_other_variants(tmp_path: Path):
+def _write_t1w(path: Path, shape: tuple[int, int, int] = (4, 4, 4)) -> Path:
+    nib.save(nib.Nifti1Image(np.zeros(shape, dtype=np.uint8), np.eye(4)), path)
+    return path
+
+
+def _session_anat(tmp_path: Path) -> Path:
     anat = tmp_path / "sub-S002" / "ses-20260101" / "anat"
     anat.mkdir(parents=True)
-    preferred = anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii"
-    preferred.touch()
-    (anat / "sub-S002_ses-20260101_acq-defaced_run-01_T1w.nii").touch()
+    return anat
+
+
+def test_find_raw_t1w_prefers_highest_complete_rec_norm_run(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii")
+    _write_t1w(anat / "sub-S002_ses-20260101_acq-defaced_run-01_T1w.nii")
+    repeat = _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii")
+
+    assert _find_raw_t1w(tmp_path) == [repeat]
+
+
+def test_find_raw_t1w_skips_repeat_with_different_dimensions(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    first = _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii")
+    _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii", shape=(4, 4, 2))
+
+    assert _find_raw_t1w(tmp_path) == [first]
+
+
+def test_find_raw_t1w_uses_most_common_dimensions(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii")
+    second = _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii")
+    _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-03_T1w.nii", shape=(4, 4, 2))
+
+    assert _find_raw_t1w(tmp_path) == [second]
+
+
+def test_find_raw_t1w_ignores_unreadable_run01(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    (anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii").write_bytes(b"corrupt")
+    repeat = _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii")
+
+    assert _find_raw_t1w(tmp_path) == [repeat]
+
+
+def test_find_raw_t1w_ignores_unreadable_repeat(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    first = _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii")
+    (anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii").write_bytes(b"corrupt")
+
+    assert _find_raw_t1w(tmp_path) == [first]
+
+
+def test_find_raw_t1w_uses_repeat_when_no_run01(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    _write_t1w(anat / "sub-S002_ses-20260101_acq-defaced_run-02_T1w.nii")
+    repeat = _write_t1w(anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii")
+
+    assert _find_raw_t1w(tmp_path) == [repeat]
+
+
+def test_find_raw_t1w_falls_back_to_run01_when_no_header_readable(tmp_path: Path):
+    anat = _session_anat(tmp_path)
+    first = anat / "sub-S002_ses-20260101_rec-norm_run-01_T1w.nii"
+    first.touch()
     (anat / "sub-S002_ses-20260101_rec-norm_run-02_T1w.nii").touch()
 
-    assert _find_raw_t1w(tmp_path) == [preferred]
+    assert _find_raw_t1w(tmp_path) == [first]
 
 
 def test_find_raw_t1w_skips_ambiguous_session(tmp_path: Path):
